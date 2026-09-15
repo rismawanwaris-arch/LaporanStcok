@@ -489,6 +489,46 @@ const server = http.createServer((req, res) => {
     }
   }
 
+  if (req.method === 'GET' && pathname === '/api/analytics/stockout-history') {
+    try {
+      const days = Math.min(180, Math.max(1, parseInt(parsedUrl.searchParams.get('days') || '30', 10)));
+      const data = db.getStockoutHistory(days);
+      return sendJson(res, 200, { success: true, data });
+    } catch (err) {
+      return sendJson(res, 500, { success: false, message: err.message });
+    }
+  }
+
+  if (req.method === 'GET' && pathname === '/api/analytics/abc-aging') {
+    try {
+      const days = Math.min(365, Math.max(1, parseInt(parsedUrl.searchParams.get('days') || '90', 10)));
+      const data = db.getABCAgingAnalysis(days);
+      return sendJson(res, 200, { success: true, data });
+    } catch (err) {
+      return sendJson(res, 500, { success: false, message: err.message });
+    }
+  }
+
+  if (req.method === 'GET' && pathname === '/api/analytics/outlet-performance') {
+    try {
+      const days = Math.min(180, Math.max(1, parseInt(parsedUrl.searchParams.get('days') || '30', 10)));
+      const data = db.getOutletPerformance(days);
+      return sendJson(res, 200, { success: true, data });
+    } catch (err) {
+      return sendJson(res, 500, { success: false, message: err.message });
+    }
+  }
+
+  if (req.method === 'GET' && pathname === '/api/analytics/vendor-analysis') {
+    try {
+      const days = Math.min(365, Math.max(1, parseInt(parsedUrl.searchParams.get('days') || '90', 10)));
+      const data = db.getVendorAnalysis(days);
+      return sendJson(res, 200, { success: true, data });
+    } catch (err) {
+      return sendJson(res, 500, { success: false, message: err.message });
+    }
+  }
+
   // 6. Database Management APIs
   if (req.method === 'GET' && pathname === '/api/database/info') {
     try {

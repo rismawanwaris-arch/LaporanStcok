@@ -560,6 +560,447 @@ class StockDatabase {
     };
   }
 
+  /**
+   * Analyzes recurring stockouts over a rolling window of daily stock reports,
+   * cross-referenced with sales velocity, to surface items that sell well but
+   * are chronically out of stock ("habit" tracking across daily uploads).
+   *
+   * Note: stock_records only stores rows where stock > 0 (see saveReport), so a
+   * report_date with no row for a given item+outlet is treated as a 0-stock day
+   * for that item+outlet — valid as long as the daily CSV export always lists
+   * every item in a merk section (Bee Accounting exports do), even at 0 stock.
+   *
+   * @param {number} [days=30] - How many of the most recent daily stock reports to include
+   * @param {number} [chronicThresholdPct=20] - Min avg stockout rate (%) to flag an item as "chronic"
+   */
+  getStockoutHistory(days = 30, chronicThresholdPct = 20) {
+    const reportDates = this.db.prepare(`
+      SELECT report_date FROM reports ORDER BY report_date DESC LIMIT ?
+    `).all(days).map(r => r.report_date).sort();
+
+    if (reportDates.length === 0) {
+      return { days, reportDatesCount: 0, dateRange: null, chronicThresholdPct, items: [], outletSummary: [] };
+    }
+
+    const stockPlaceholders = reportDates.map(() => '?').join(',');
+
+    const stockRows = this.db.prepare(`
+      SELECT report_date, merk, item_code, item_name, outlet, stock
+      FROM stock_records
+      WHERE report_date IN (${stockPlaceholders})
+    `).all(...reportDates);
+
+    // Sales are uploaded on their own cadence, independent of stock report dates
+    // (see getIntegratedData) — so the sales window is its own set of recent
+    // transaction dates rather than reusing reportDates.
+    const salesDates = this.db.prepare(`
+      SELECT DISTINCT transaction_date FROM sales_records ORDER BY transaction_date DESC LIMIT ?
+    `).all(days).map(r => r.transaction_date);
+    const numSalesDays = Math.max(1, salesDates.length);
+
+    let salesRows = [];
+    if (salesDates.length > 0) {
+      const salesPlaceholders = salesDates.map(() => '?').join(',');
+      salesRows = this.db.prepare(`
+        SELECT item_code, item_name, outlet, SUM(qty) as total_sold
+        FROM sales_records
+        WHERE transaction_date IN (${salesPlaceholders})
+        GROUP BY item_code, outlet
+      `).all(...salesDates);
+    }
+
+    const totalWindowDays = reportDates.length;
+    const itemMap = {}; // item_code -> { name, merk, outlets: { outlet -> Set(reportDatesInStock) }, totalSold }
+
+    function ensureItem(code, name, merk) {
+      if (!itemMap[code]) {
+        itemMap[code] = { code, name: name || code, merk: merk || 'LAINNYA', outlets: {}, totalSold: 0 };
+      } else if (!itemMap[code].name && name) {
+        itemMap[code].name = name;
+      }
+      return itemMap[code];
+    }
+
+    stockRows.forEach(r => {
+      const item = ensureItem(r.item_code, r.item_name, r.merk);
+      if (!item.outlets[r.outlet]) item.outlets[r.outlet] = new Set();
+      item.outlets[r.outlet].add(r.report_date);
+    });
+
+    salesRows.forEach(r => {
+      const item = ensureItem(r.item_code, r.item_name, null);
+      item.totalSold += r.total_sold;
+      if (!item.outlets[r.outlet]) item.outlets[r.outlet] = new Set(); // sold here but never seen in stock_records -> 100% stockout
+    });
+
+    const outletTotals = {}; // outlet -> { totalStockoutDays, itemsAffected }
+
+    const items = Object.values(itemMap).map(item => {
+      const outletDetails = Object.entries(item.outlets).map(([outlet, dateSet]) => {
+        const daysInStock = dateSet.size;
+        const daysOutOfStock = totalWindowDays - daysInStock;
+        const stockoutRate = +(daysOutOfStock / totalWindowDays * 100).toFixed(1);
+
+        if (daysOutOfStock > 0) {
+          if (!outletTotals[outlet]) outletTotals[outlet] = { outlet, totalStockoutDays: 0, itemsAffected: 0 };
+          outletTotals[outlet].totalStockoutDays += daysOutOfStock;
+          outletTotals[outlet].itemsAffected += 1;
+        }
+
+        return { outlet, daysInStock, daysOutOfStock, stockoutRate };
+      }).sort((a, b) => b.daysOutOfStock - a.daysOutOfStock);
+
+      const worstOutlet = outletDetails[0] || null;
+      const avgStockoutRate = outletDetails.length > 0
+        ? +(outletDetails.reduce((s, o) => s + o.stockoutRate, 0) / outletDetails.length).toFixed(1)
+        : 0;
+      const ads = +(item.totalSold / numSalesDays).toFixed(2);
+      // Chronic problem score: only meaningful for items that actually sell —
+      // rewards items that are both fast-moving AND frequently unavailable.
+      const problemScore = +(ads * avgStockoutRate).toFixed(2);
+      const isChronic = ads > 0 && avgStockoutRate >= chronicThresholdPct;
+
+      return {
+        code: item.code,
+        name: item.name,
+        merk: item.merk,
+        totalSold: item.totalSold,
+        ads,
+        avgStockoutRate,
+        maxDaysOutOfStock: worstOutlet ? worstOutlet.daysOutOfStock : 0,
+        worstOutlet: worstOutlet ? worstOutlet.outlet : '-',
+        outletDetails,
+        problemScore,
+        isChronic
+      };
+    });
+
+    items.sort((a, b) => b.problemScore - a.problemScore);
+
+    const outletSummary = Object.values(outletTotals).sort((a, b) => b.totalStockoutDays - a.totalStockoutDays);
+
+    return {
+      days,
+      reportDatesCount: totalWindowDays,
+      salesDatesCount: salesDates.length,
+      dateRange: { first: reportDates[0], latest: reportDates[reportDates.length - 1] },
+      chronicThresholdPct,
+      items,
+      outletSummary
+    };
+  }
+
+  /**
+   * ABC classification (revenue Pareto: A ≈ top 80% cumulative, B ≈ next 15%,
+   * C ≈ last 5%) crossed with stock aging (days since last sale) for every
+   * item that currently has stock on hand — surfaces both "important item
+   * running low" and "dead stock tying up capital" in one report.
+   *
+   * @param {number} [days=90] - Sales window used to rank items for ABC classification
+   */
+  getABCAgingAnalysis(days = 90) {
+    const latest = this.db.prepare(`SELECT report_date FROM reports ORDER BY report_date DESC LIMIT 1`).get();
+    if (!latest) {
+      return { days, latestStockDate: null, items: [] };
+    }
+    const latestStockDate = latest.report_date;
+
+    const currentStockRows = this.db.prepare(`
+      SELECT merk, item_code, item_name, SUM(stock) as total_stock
+      FROM stock_records
+      WHERE report_date = ?
+      GROUP BY item_code
+      HAVING total_stock > 0
+    `).all(latestStockDate);
+
+    const salesDates = this.db.prepare(`
+      SELECT DISTINCT transaction_date FROM sales_records ORDER BY transaction_date DESC LIMIT ?
+    `).all(days).map(r => r.transaction_date);
+
+    let salesInWindow = [];
+    if (salesDates.length > 0) {
+      const placeholders = salesDates.map(() => '?').join(',');
+      salesInWindow = this.db.prepare(`
+        SELECT item_code, SUM(subtotal) as revenue, SUM(qty) as qty
+        FROM sales_records
+        WHERE transaction_date IN (${placeholders})
+        GROUP BY item_code
+      `).all(...salesDates);
+    }
+
+    const lastSaleRows = this.db.prepare(`
+      SELECT item_code, MAX(transaction_date) as last_sale_date, AVG(sell_price) as avg_sell_price
+      FROM sales_records
+      GROUP BY item_code
+    `).all();
+    const lastSaleMap = {};
+    lastSaleRows.forEach(r => { lastSaleMap[r.item_code] = r; });
+
+    const revenueMap = {};
+    let totalRevenue = 0;
+    salesInWindow.forEach(r => {
+      revenueMap[r.item_code] = { revenue: r.revenue || 0, qty: r.qty || 0 };
+      totalRevenue += (r.revenue || 0);
+    });
+
+    // Rank only items that actually generated revenue in the window, for a proper Pareto split
+    const ranked = currentStockRows
+      .map(r => ({ code: r.item_code, revenue: (revenueMap[r.item_code] || {}).revenue || 0 }))
+      .filter(r => r.revenue > 0)
+      .sort((a, b) => b.revenue - a.revenue);
+
+    const abcClassMap = {};
+    let cumulative = 0;
+    ranked.forEach(r => {
+      cumulative += r.revenue;
+      const cumPct = totalRevenue > 0 ? (cumulative / totalRevenue) * 100 : 0;
+      abcClassMap[r.code] = cumPct <= 80 ? 'A' : (cumPct <= 95 ? 'B' : 'C');
+    });
+
+    function daysBetween(a, b) {
+      const d1 = new Date(a + 'T00:00:00Z').getTime();
+      const d2 = new Date(b + 'T00:00:00Z').getTime();
+      return Math.round((d1 - d2) / 86400000);
+    }
+
+    function agingBucketFor(agingDays, neverSold) {
+      if (neverSold) return 'NEVER_SOLD';
+      if (agingDays <= 30) return 'FRESH';
+      if (agingDays <= 60) return 'AGING_30_60';
+      if (agingDays <= 90) return 'AGING_60_90';
+      return 'DEAD_STOCK';
+    }
+
+    const items = currentStockRows.map(r => {
+      const saleInfo = lastSaleMap[r.item_code];
+      const neverSold = !saleInfo || !saleInfo.last_sale_date;
+      const agingDays = neverSold ? null : daysBetween(latestStockDate, saleInfo.last_sale_date);
+      const avgSellPrice = saleInfo && saleInfo.avg_sell_price ? saleInfo.avg_sell_price : 0;
+      const revenueInWindow = (revenueMap[r.item_code] || {}).revenue || 0;
+      const qtyInWindow = (revenueMap[r.item_code] || {}).qty || 0;
+
+      return {
+        code: r.item_code,
+        name: r.item_name,
+        merk: r.merk,
+        currentStock: r.total_stock,
+        abcClass: abcClassMap[r.item_code] || '-',
+        revenueInWindow: Math.round(revenueInWindow),
+        qtyInWindow,
+        lastSaleDate: neverSold ? null : saleInfo.last_sale_date,
+        neverSold,
+        agingDays: neverSold ? null : Math.max(0, agingDays),
+        agingBucket: agingBucketFor(agingDays, neverSold),
+        estimatedValue: Math.round(r.total_stock * avgSellPrice)
+      };
+    });
+
+    // Worst-first: dead stock and never-sold items with the highest tied-up value surface first
+    items.sort((a, b) => {
+      const rank = { NEVER_SOLD: 0, DEAD_STOCK: 1, AGING_60_90: 2, AGING_30_60: 3, FRESH: 4 };
+      if (rank[a.agingBucket] !== rank[b.agingBucket]) return rank[a.agingBucket] - rank[b.agingBucket];
+      return b.estimatedValue - a.estimatedValue;
+    });
+
+    return { days, latestStockDate, totalRevenue: Math.round(totalRevenue), items };
+  }
+
+  /**
+   * Ranks outlets by sales performance over a window, cross-referenced with
+   * current stock levels and how often their assortment was out of stock in
+   * the same window — surfaces both top performers and branches needing help.
+   *
+   * @param {number} [days=30]
+   */
+  getOutletPerformance(days = 30) {
+    const salesDates = this.db.prepare(`
+      SELECT DISTINCT transaction_date FROM sales_records ORDER BY transaction_date DESC LIMIT ?
+    `).all(days).map(r => r.transaction_date);
+
+    let salesRows = [];
+    if (salesDates.length > 0) {
+      const placeholders = salesDates.map(() => '?').join(',');
+      salesRows = this.db.prepare(`
+        SELECT outlet, SUM(subtotal) as revenue, SUM(profit_loss) as profit, SUM(qty) as qty,
+               COUNT(DISTINCT transaction_no) as tx_count
+        FROM sales_records
+        WHERE transaction_date IN (${placeholders})
+        GROUP BY outlet
+      `).all(...salesDates);
+    }
+
+    const latest = this.db.prepare(`SELECT report_date FROM reports ORDER BY report_date DESC LIMIT 1`).get();
+    let stockRows = [];
+    if (latest) {
+      stockRows = this.db.prepare(`
+        SELECT outlet, SUM(stock) as total_stock, COUNT(DISTINCT item_code) as item_count
+        FROM stock_records
+        WHERE report_date = ?
+        GROUP BY outlet
+      `).all(latest.report_date);
+    }
+
+    // Stockout rate per outlet: reuses the same "no stock_records row on a
+    // report date = 0 stock that day" assumption as getStockoutHistory, but
+    // aggregated by outlet instead of by item.
+    const reportDates = this.db.prepare(`
+      SELECT report_date FROM reports ORDER BY report_date DESC LIMIT ?
+    `).all(days).map(r => r.report_date);
+    let stockoutRows = [];
+    if (reportDates.length > 0) {
+      const placeholders = reportDates.map(() => '?').join(',');
+      stockoutRows = this.db.prepare(`
+        SELECT report_date, outlet, item_code FROM stock_records WHERE report_date IN (${placeholders})
+      `).all(...reportDates);
+    }
+    const outletItemDays = {}; // outlet -> item_code -> Set(reportDatesInStock)
+    stockoutRows.forEach(r => {
+      if (!outletItemDays[r.outlet]) outletItemDays[r.outlet] = {};
+      if (!outletItemDays[r.outlet][r.item_code]) outletItemDays[r.outlet][r.item_code] = new Set();
+      outletItemDays[r.outlet][r.item_code].add(r.report_date);
+    });
+    const totalWindowDays = Math.max(1, reportDates.length);
+    const stockoutRateByOutlet = {};
+    Object.entries(outletItemDays).forEach(([outlet, items]) => {
+      const rates = Object.values(items).map(dateSet => (totalWindowDays - dateSet.size) / totalWindowDays * 100);
+      stockoutRateByOutlet[outlet] = rates.length > 0 ? +(rates.reduce((s, v) => s + v, 0) / rates.length).toFixed(1) : 0;
+    });
+
+    const outletMap = {};
+    function ensureOutlet(name) {
+      if (!outletMap[name]) {
+        outletMap[name] = { outlet: name, revenue: 0, profit: 0, qty: 0, txCount: 0, currentStock: 0, itemCount: 0, stockoutRate: 0 };
+      }
+      return outletMap[name];
+    }
+    salesRows.forEach(r => {
+      const o = ensureOutlet(r.outlet);
+      o.revenue = r.revenue || 0;
+      o.profit = r.profit || 0;
+      o.qty = r.qty || 0;
+      o.txCount = r.tx_count || 0;
+    });
+    stockRows.forEach(r => {
+      const o = ensureOutlet(r.outlet);
+      o.currentStock = r.total_stock || 0;
+      o.itemCount = r.item_count || 0;
+    });
+    Object.entries(stockoutRateByOutlet).forEach(([outlet, rate]) => {
+      ensureOutlet(outlet).stockoutRate = rate;
+    });
+
+    const totalNetworkRevenue = Object.values(outletMap).reduce((s, o) => s + o.revenue, 0);
+
+    const outlets = Object.values(outletMap).map(o => ({
+      ...o,
+      revenueSharePct: totalNetworkRevenue > 0 ? +((o.revenue / totalNetworkRevenue) * 100).toFixed(1) : 0
+    }));
+
+    outlets.sort((a, b) => b.revenue - a.revenue);
+    outlets.forEach((o, idx) => { o.rank = idx + 1; });
+
+    // "Perlu Perhatian": bottom half of the network by revenue AND above-average stockout rate
+    const avgStockoutRate = outlets.length > 0 ? outlets.reduce((s, o) => s + o.stockoutRate, 0) / outlets.length : 0;
+    const medianRank = outlets.length / 2;
+    outlets.forEach(o => {
+      o.needsAttention = o.rank > medianRank && o.stockoutRate > avgStockoutRate;
+    });
+
+    return { days, salesDatesCount: salesDates.length, totalNetworkRevenue: Math.round(totalNetworkRevenue), avgStockoutRate: +avgStockoutRate.toFixed(1), outlets };
+  }
+
+  /**
+   * Summarizes vendor spend and cross-vendor price competitiveness from
+   * purchase history. Delivery lead time isn't tracked in the source data
+   * (only an invoice/purchase date is recorded), so "fastest vendor" isn't
+   * derivable — this focuses on what the data actually supports: spend,
+   * purchase frequency, and per-item price comparison across vendors.
+   *
+   * @param {number} [days=90]
+   */
+  getVendorAnalysis(days = 90) {
+    const purchDates = this.db.prepare(`
+      SELECT DISTINCT purchase_date FROM purchase_records ORDER BY purchase_date DESC LIMIT ?
+    `).all(days).map(r => r.purchase_date);
+
+    if (purchDates.length === 0) {
+      return { days, vendors: [] };
+    }
+
+    const placeholders = purchDates.map(() => '?').join(',');
+    const rows = this.db.prepare(`
+      SELECT vendor, item_code, item_name, invoice_no, purchase_date, qty, unit_price, subtotal
+      FROM purchase_records
+      WHERE purchase_date IN (${placeholders}) AND vendor IS NOT NULL AND vendor != ''
+    `).all(...purchDates);
+
+    const vendorMap = {};
+    // itemVendorPrices: item_code -> vendor -> { totalQty, totalSpend } (for avg unit price per vendor per item)
+    const itemVendorPrices = {};
+
+    rows.forEach(r => {
+      if (!vendorMap[r.vendor]) {
+        vendorMap[r.vendor] = { vendor: r.vendor, totalSpend: 0, totalQty: 0, invoices: new Set(), items: new Set(), lastPurchaseDate: r.purchase_date };
+      }
+      const v = vendorMap[r.vendor];
+      v.totalSpend += r.subtotal || 0;
+      v.totalQty += r.qty || 0;
+      if (r.invoice_no) v.invoices.add(r.invoice_no);
+      v.items.add(r.item_code);
+      if (r.purchase_date > v.lastPurchaseDate) v.lastPurchaseDate = r.purchase_date;
+
+      if (!itemVendorPrices[r.item_code]) itemVendorPrices[r.item_code] = {};
+      if (!itemVendorPrices[r.item_code][r.vendor]) {
+        itemVendorPrices[r.item_code][r.vendor] = { totalQty: 0, totalSpend: 0, itemName: r.item_name };
+      }
+      itemVendorPrices[r.item_code][r.vendor].totalQty += r.qty || 0;
+      itemVendorPrices[r.item_code][r.vendor].totalSpend += r.subtotal || 0;
+    });
+
+    // For each item purchased from 2+ vendors, find the cheapest vendor by avg unit price
+    const cheapestVendorCountByVendor = {}; // vendor -> count of items where they're the cheapest
+    const priceGapItems = []; // items where price spread between vendors is significant
+    Object.entries(itemVendorPrices).forEach(([itemCode, vendorPrices]) => {
+      const entries = Object.entries(vendorPrices).map(([vendor, v]) => ({
+        vendor,
+        itemName: v.itemName,
+        avgUnitPrice: v.totalQty > 0 ? v.totalSpend / v.totalQty : 0
+      })).filter(e => e.avgUnitPrice > 0);
+
+      if (entries.length < 2) return; // only one vendor supplies this item — no comparison possible
+
+      entries.sort((a, b) => a.avgUnitPrice - b.avgUnitPrice);
+      const cheapest = entries[0];
+      const priciest = entries[entries.length - 1];
+      cheapestVendorCountByVendor[cheapest.vendor] = (cheapestVendorCountByVendor[cheapest.vendor] || 0) + 1;
+
+      const spreadPct = cheapest.avgUnitPrice > 0 ? ((priciest.avgUnitPrice - cheapest.avgUnitPrice) / cheapest.avgUnitPrice) * 100 : 0;
+      if (spreadPct >= 10) {
+        priceGapItems.push({
+          itemCode, itemName: cheapest.itemName,
+          cheapestVendor: cheapest.vendor, cheapestPrice: Math.round(cheapest.avgUnitPrice),
+          priciestVendor: priciest.vendor, priciestPrice: Math.round(priciest.avgUnitPrice),
+          spreadPct: Math.round(spreadPct)
+        });
+      }
+    });
+
+    const vendors = Object.values(vendorMap).map(v => ({
+      vendor: v.vendor,
+      totalSpend: Math.round(v.totalSpend),
+      totalQty: v.totalQty,
+      invoiceCount: v.invoices.size,
+      itemsSuppliedCount: v.items.size,
+      lastPurchaseDate: v.lastPurchaseDate,
+      cheapestOnCount: cheapestVendorCountByVendor[v.vendor] || 0
+    }));
+
+    vendors.sort((a, b) => b.totalSpend - a.totalSpend);
+    priceGapItems.sort((a, b) => b.spreadPct - a.spreadPct);
+
+    return { days, vendors, priceGapItems: priceGapItems.slice(0, 50) };
+  }
+
   // ==========================================
   // SYSTEM & MAINTENANCE
   // ==========================================

@@ -15,6 +15,21 @@ function escapeHtml(str) {
 window.escapeHtml = escapeHtml;
 
 document.addEventListener('DOMContentLoaded', () => {
+  // Virtualized stock table state (see renderTable/renderVisibleRows).
+  // VT_ROW_HEIGHT is a fixed estimate matching the row's CSS (4px td padding
+  // top/bottom + a 14px item-name line + an 11px code line, both at the
+  // page's 1.6 line-height) — exact per-row measurement isn't needed since a
+  // buffer of extra rows is rendered above/below the viewport to absorb it.
+  const VT_ROW_HEIGHT = 48;
+  const VT_BUFFER_ROWS = 8;
+  let virtualTable = {
+    items: [],
+    filteredItems: [],
+    outlets: [],
+    outletTotals: [],
+    grandTotal: 0
+  };
+
   // Global State
   let appState = {
     parsedData: null,
@@ -49,7 +64,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnExportCsv = document.getElementById('btn-export-csv');
   const btnExportXlsx = document.getElementById('btn-export-xlsx');
   const btnFullscreen = document.getElementById('btn-fullscreen');
-  const btnDbManage = document.getElementById('btn-db-manage');
 
   // Initialize UI components
   init();
@@ -64,6 +78,10 @@ document.addEventListener('DOMContentLoaded', () => {
     setupRebalanceControls();
     setupCoverageControls();
     setupPOControls();
+    setupStockoutControls();
+    setupABCControls();
+    setupOutletPerformanceControls();
+    setupVendorAnalysisControls();
     setupImportCenter();
     
     // Check backend API and database first, fallback to static CSV
@@ -271,8 +289,33 @@ document.addEventListener('DOMContentLoaded', () => {
       clearUI();
       return;
     }
-    renderTable();
-    renderCharts();
+    renderTableAndCharts();
+  }
+
+  // Resolves the currently active merk's item/outlet data (merged across all
+  // merks when "ALL" is selected). Shared by renderTable() and renderCharts()
+  // so the merge + outlet sort only run once per render instead of twice.
+  function getActiveMerkData() {
+    if (appState.activeMerk === 'ALL') {
+      const merkData = {
+        name: 'SEMUA MERK',
+        items: {},
+        outlets: appState.parsedData.allOutlets
+      };
+      Object.values(appState.parsedData.merks).forEach(merkObj => {
+        Object.assign(merkData.items, merkObj.items);
+      });
+      return merkData;
+    }
+    return appState.parsedData.merks[appState.activeMerk];
+  }
+
+  function renderTableAndCharts() {
+    const merkData = getActiveMerkData();
+    if (!merkData) return;
+    const outlets = OutletSorter.sortOutlets(merkData.outlets, appState.activeMerk);
+    renderTable(merkData, outlets);
+    renderCharts(merkData, outlets);
   }
 
   function clearUI() {
@@ -286,33 +329,28 @@ document.addEventListener('DOMContentLoaded', () => {
     `;
     if (appState.itemChart) appState.itemChart.destroy();
     if (appState.outletChart) appState.outletChart.destroy();
+    virtualTable = { items: [], filteredItems: [], outlets: [], outletTotals: [], grandTotal: 0 };
   }
 
   // 7. Render Stock Table with columns = Outlets, rows = Items
-  function renderTable() {
-    let merkData;
-    if (appState.activeMerk === 'ALL') {
-      merkData = {
-        name: 'SEMUA MERK',
-        items: {},
-        outlets: appState.parsedData.allOutlets
-      };
-      Object.values(appState.parsedData.merks).forEach(merkObj => {
-        Object.assign(merkData.items, merkObj.items);
-      });
-    } else {
-      merkData = appState.parsedData.merks[appState.activeMerk];
+  // Only the rows currently scrolled into view are ever put in the DOM (see
+  // renderVisibleRows below) — with "Semua Merk" selected there can be
+  // ~1450 items x 43 outlets (~60k cells), which is what made opening data feel
+  // laggy when the whole table was built and inserted into the DOM at once.
+  function renderTable(merkData, outlets) {
+    if (!merkData) {
+      merkData = getActiveMerkData();
+      if (!merkData) return;
     }
-    if (!merkData) return;
+    if (!outlets) {
+      outlets = OutletSorter.sortOutlets(merkData.outlets, appState.activeMerk);
+    }
 
     const items = Object.values(merkData.items);
-    
-    // Sort outlets according to custom drag order or CSV default order
-    const outlets = OutletSorter.sortOutlets(merkData.outlets, appState.activeMerk);
 
     // Render Table Headers (Columns = Outlets)
     let headerHtml = `<th class="non-draggable">Barang / Item</th>`;
-    
+
     outlets.forEach(outlet => {
       headerHtml += `
         <th data-outlet="${escapeHtml(outlet)}" style="cursor: grab; min-width: 42px; max-width: 55px; width: 48px; text-align: center;">
@@ -328,120 +366,178 @@ document.addEventListener('DOMContentLoaded', () => {
     headerHtml += `<th class="non-draggable" style="text-align: center;">TOTAL (PCS)</th>`;
     tableHeaders.innerHTML = headerHtml;
 
-    // Render Rows (Rows = Items)
-    let tbodyHtml = '';
-    
+    // Outlet/grand totals only need one numeric pass over the full item list
+    // (cheap — no HTML string building) and stay fixed regardless of scroll
+    // position or the active search filter, matching the previous behavior.
+    const outletTotals = new Array(outlets.length).fill(0);
+    let grandTotal = 0;
     items.forEach(item => {
-      let itemTotal = 0;
-      let cellsHtml = '';
-
-      outlets.forEach(outlet => {
-        const stock = item.stocks[outlet] || 0;
-        itemTotal += stock;
-
-        // Apply heat map coloring class
-        let heatClass = 'stock-zero';
-        if (stock > 0 && stock <= 3) {
-          heatClass = 'stock-low';
-        } else if (stock > 3 && stock <= 15) {
-          heatClass = 'stock-medium';
-        } else if (stock > 15) {
-          heatClass = 'stock-high';
-        }
-
-        cellsHtml += `
-          <td class="stock-cell ${heatClass}">
-            ${stock > 0 ? stock : '-'}
-          </td>
-        `;
-      });
-
-      tbodyHtml += `
-        <tr data-item-code="${escapeHtml(item.code)}" data-item-name="${escapeHtml(item.name.toLowerCase())}">
-          <td>
-            <div style="font-weight: 600; color: var(--text-primary); white-space: normal; min-width: 220px;">${escapeHtml(item.name)}</div>
-            <div style="font-size: 11px; color: var(--text-muted);">${escapeHtml(item.code)}</div>
-          </td>
-          ${cellsHtml}
-          <td class="outlet-total" style="font-weight: 700; color: var(--accent-cyan); text-align: center;">${itemTotal}</td>
-        </tr>
-      `;
+      for (let o = 0; o < outlets.length; o++) {
+        const stock = item.stocks[outlets[o]] || 0;
+        outletTotals[o] += stock;
+        grandTotal += stock;
+      }
     });
 
-    // Render the bottom TOTAL summary row
+    virtualTable.items = items;
+    virtualTable.outlets = outlets;
+    virtualTable.outletTotals = outletTotals;
+    virtualTable.grandTotal = grandTotal;
+
+    // Setup drag-and-drop on the header row <tr> element
+    if (appState.sorterInstance) {
+      appState.sorterInstance.destroy();
+    }
+
+    appState.sorterInstance = new OutletSorter(tableHeaders, appState.activeMerk, (newOrder) => {
+      // Callback triggered when user finishes dragging columns
+      console.log('Outlet order updated:', newOrder);
+      // Rerender table so that body cells are correctly aligned with headers
+      renderTableAndCharts();
+    });
+
+    filterTableRows(); // (re)computes the filtered item list and renders the visible window
+    setupVirtualScrollListener();
+  }
+
+  // Builds one item row's HTML (extracted so renderVisibleRows can call it per visible item only)
+  function buildItemRowHtml(item, outlets) {
+    let itemTotal = 0;
+    let cellsHtml = '';
+
+    for (let o = 0; o < outlets.length; o++) {
+      const stock = item.stocks[outlets[o]] || 0;
+      itemTotal += stock;
+
+      let heatClass = 'stock-zero';
+      if (stock > 0 && stock <= 3) {
+        heatClass = 'stock-low';
+      } else if (stock > 3 && stock <= 15) {
+        heatClass = 'stock-medium';
+      } else if (stock > 15) {
+        heatClass = 'stock-high';
+      }
+
+      cellsHtml += `
+        <td class="stock-cell ${heatClass}">
+          ${stock > 0 ? stock : '-'}
+        </td>
+      `;
+    }
+
+    return `
+      <tr data-item-code="${escapeHtml(item.code)}" data-item-name="${escapeHtml(item.name.toLowerCase())}">
+        <td>
+          <div style="font-weight: 600; color: var(--text-primary); white-space: normal; min-width: 220px;">${escapeHtml(item.name)}</div>
+          <div style="font-size: 11px; color: var(--text-muted);">${escapeHtml(item.code)}</div>
+        </td>
+        ${cellsHtml}
+        <td class="outlet-total" style="font-weight: 700; color: var(--accent-cyan); text-align: center;">${itemTotal}</td>
+      </tr>
+    `;
+  }
+
+  // Renders only the rows scrolled into view (plus a small buffer), using two
+  // spacer <tr> elements to keep the scrollbar height and column widths correct.
+  function renderVisibleRows(resetScroll) {
+    const wrapper = tableBody.closest('.table-wrapper');
+    if (!wrapper) return;
+
+    if (resetScroll) wrapper.scrollTop = 0;
+
+    const items = virtualTable.filteredItems;
+    const outlets = virtualTable.outlets;
+    const total = items.length;
+    const colCount = outlets.length + 2;
+
+    const thead = tableHeaders.closest('thead');
+    const theadHeight = thead ? thead.offsetHeight : 0;
+    const scrollTop = Math.max(0, wrapper.scrollTop - theadHeight);
+    const viewportHeight = wrapper.clientHeight || 600;
+
+    let startIndex = Math.max(0, Math.floor(scrollTop / VT_ROW_HEIGHT) - VT_BUFFER_ROWS);
+    const visibleCount = Math.ceil(viewportHeight / VT_ROW_HEIGHT) + VT_BUFFER_ROWS * 2;
+    const endIndex = Math.min(total, startIndex + visibleCount);
+
+    const topSpacerHeight = startIndex * VT_ROW_HEIGHT;
+    const bottomSpacerHeight = Math.max(0, (total - endIndex) * VT_ROW_HEIGHT);
+
+    let tbodyHtml = '';
+    if (topSpacerHeight > 0) {
+      tbodyHtml += `<tr class="v-spacer-row"><td colspan="${colCount}" style="height:${topSpacerHeight}px; padding:0; border:none; background:transparent;"></td></tr>`;
+    }
+
+    for (let i = startIndex; i < endIndex; i++) {
+      tbodyHtml += buildItemRowHtml(items[i], outlets);
+    }
+
+    if (bottomSpacerHeight > 0) {
+      tbodyHtml += `<tr class="v-spacer-row"><td colspan="${colCount}" style="height:${bottomSpacerHeight}px; padding:0; border:none; background:transparent;"></td></tr>`;
+    }
+
+    // TOTAL summary row: always shown, computed once in renderTable() over the
+    // full (unfiltered) item list — matches the previous non-virtualized behavior.
     let totalCellsHtml = '';
-    let grandTotal = 0;
-    
-    outlets.forEach(outlet => {
-      let outletTotal = 0;
-      items.forEach(item => {
-        outletTotal += item.stocks[outlet] || 0;
-      });
-      grandTotal += outletTotal;
+    virtualTable.outletTotals.forEach(outletTotal => {
       totalCellsHtml += `<td style="font-weight: 800; color: var(--accent-indigo); text-align: center;">${outletTotal}</td>`;
     });
-
     tbodyHtml += `
       <tr style="background: rgba(99, 102, 241, 0.05); border-top: 2px solid var(--panel-border);">
         <td>
           <div style="font-weight: 800; color: var(--text-primary); text-transform: uppercase;">TOTAL</div>
         </td>
         ${totalCellsHtml}
-        <td style="font-weight: 800; color: var(--accent-cyan); text-align: center;">${grandTotal}</td>
+        <td style="font-weight: 800; color: var(--accent-cyan); text-align: center;">${virtualTable.grandTotal}</td>
       </tr>
     `;
 
     tableBody.innerHTML = tbodyHtml;
     lucide.createIcons();
+  }
 
-    // Setup drag-and-drop on the header row <tr> element
-    if (appState.sorterInstance) {
-      appState.sorterInstance.destroy();
-    }
-    
-    appState.sorterInstance = new OutletSorter(tableHeaders, appState.activeMerk, (newOrder) => {
-      // Callback triggered when user finishes dragging columns
-      console.log('Outlet order updated:', newOrder);
-      // Rerender table so that body cells are correctly aligned with headers
-      renderTable();
-      renderCharts(); 
-    });
+  // Attaches (once) the scroll listener that drives the windowed re-render above.
+  function setupVirtualScrollListener() {
+    const wrapper = tableBody.closest('.table-wrapper');
+    if (!wrapper) return;
 
-    // If there is a current search query, filter immediately
-    if (appState.searchQuery) {
-      filterTableRows();
+    if (wrapper._vtScrollHandler) {
+      wrapper.removeEventListener('scroll', wrapper._vtScrollHandler);
     }
+
+    let ticking = false;
+    const handler = () => {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(() => {
+        renderVisibleRows(false);
+        ticking = false;
+      });
+    };
+    wrapper._vtScrollHandler = handler;
+    wrapper.addEventListener('scroll', handler, { passive: true });
   }
 
   // 8. Filter Table Rows based on Search
+  // Filters the in-memory item list (rather than toggling DOM visibility, which
+  // doesn't work once rows outside the viewport are no longer in the DOM) and
+  // re-renders just the visible window against the filtered list.
   function filterTableRows() {
-    const rows = tableBody.querySelectorAll('tr[data-item-code]');
     const q = appState.searchQuery;
-    
-    rows.forEach(row => {
-      const code = row.getAttribute('data-item-code').toLowerCase();
-      const name = row.getAttribute('data-item-name').toLowerCase();
-      const match = code.includes(q) || name.includes(q);
-      row.style.display = match ? '' : 'none';
-    });
+    virtualTable.filteredItems = q
+      ? virtualTable.items.filter(item => item.code.toLowerCase().includes(q) || item.name.toLowerCase().includes(q))
+      : virtualTable.items;
+    renderVisibleRows(true);
   }
 
   // 9. Render Chart.js Visualizations
-  function renderCharts() {
-    let merkData;
-    if (appState.activeMerk === 'ALL') {
-      merkData = {
-        name: 'SEMUA MERK',
-        items: {},
-        outlets: appState.parsedData.allOutlets
-      };
-      Object.values(appState.parsedData.merks).forEach(merkObj => {
-        Object.assign(merkData.items, merkObj.items);
-      });
-    } else {
-      merkData = appState.parsedData.merks[appState.activeMerk];
+  function renderCharts(merkData, sortedOutlets) {
+    if (!merkData) {
+      merkData = getActiveMerkData();
+      if (!merkData) return;
     }
-    if (!merkData) return;
+    if (!sortedOutlets) {
+      sortedOutlets = OutletSorter.sortOutlets(merkData.outlets, appState.activeMerk);
+    }
 
     // Destory existing charts
     if (appState.itemChart) appState.itemChart.destroy();
@@ -449,8 +545,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Gather statistics
     const itemsData = StockAnalytics.getItemStatistics(merkData);
-    const sortedOutlets = OutletSorter.sortOutlets(merkData.outlets, appState.activeMerk);
-    
+
     const outletsStats = sortedOutlets.map(outlet => {
       let total = 0;
       Object.values(merkData.items).forEach(item => {
@@ -571,8 +666,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const confirmReset = confirm(`Apakah Anda yakin ingin menyetel ulang urutan outlet untuk ${label}?`);
       if (confirmReset) {
         OutletSorter.resetSavedOrder(appState.activeMerk);
-        renderTable();
-        renderCharts();
+        renderTableAndCharts();
         showStatus('Urutan outlet berhasil dikembalikan ke default.', 'info');
       }
     });
@@ -747,6 +841,11 @@ document.addEventListener('DOMContentLoaded', () => {
         btnFullscreen.innerHTML = '<i data-lucide="maximize-2" style="width: 14px; height: 14px; display: inline; vertical-align: middle;"></i> Fullscreen';
       }
       lucide.createIcons();
+      // Wrapper height just changed — re-render the visible window immediately
+      // instead of waiting for the next scroll event.
+      if (virtualTable.outlets.length > 0) {
+        setTimeout(() => renderVisibleRows(false), 0);
+      }
     });
 
     // Delete Report Date from database
@@ -813,161 +912,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // 12. Setup Database Management Sidebar Drawer
+  // 12. Setup Database Management Page (Tab: Kelola Database)
   function setupDatabaseModal() {
-    const dbSidebar = document.getElementById('db-sidebar');
-    const dbSidebarOverlay = document.getElementById('db-sidebar-overlay');
-    const btnCloseSidebar = document.getElementById('btn-close-sidebar');
-    const dbStatSize = document.getElementById('db-stat-size');
-    const dbStatReports = document.getElementById('db-stat-reports');
-    const dbStatRecords = document.getElementById('db-stat-records');
-    const dbStatRange = document.getElementById('db-stat-range');
-    const dbReportsList = document.getElementById('db-reports-list');
     const btnClearDb = document.getElementById('btn-clear-db');
     const restoreFileInput = document.getElementById('restore-file-input');
-
-    if (!btnDbManage || !dbSidebar) return;
-
-    btnDbManage.addEventListener('click', () => {
-      openSidebar();
-    });
-
-    if (btnCloseSidebar) {
-      btnCloseSidebar.addEventListener('click', () => {
-        closeSidebar();
-      });
-    }
-
-    if (dbSidebarOverlay) {
-      dbSidebarOverlay.addEventListener('click', () => {
-        closeSidebar();
-      });
-    }
-
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && dbSidebar.classList.contains('active')) {
-        closeSidebar();
-      }
-    });
-
-    function openSidebar() {
-      if (!appState.isBackendAvailable) {
-        alert('Fitur manajemen database hanya aktif saat server backend berjalan (port 3000). Silakan jalankan "npm start" atau deploy di ZimaOS.');
-        return;
-      }
-      if (dbSidebarOverlay) dbSidebarOverlay.style.display = 'block';
-      setTimeout(() => {
-        if (dbSidebarOverlay) dbSidebarOverlay.classList.add('active');
-        dbSidebar.classList.add('active');
-      }, 10);
-      loadSidebarData();
-    }
-
-    function closeSidebar() {
-      if (dbSidebarOverlay) dbSidebarOverlay.classList.remove('active');
-      dbSidebar.classList.remove('active');
-      setTimeout(() => {
-        if (dbSidebarOverlay) dbSidebarOverlay.style.display = 'none';
-      }, 300);
-    }
-
-    async function loadSidebarData() {
-      // 1. Fetch Database Info
-      try {
-        const res = await fetch('/api/database/info');
-        if (res.ok) {
-          const json = await res.json();
-          if (json.success && json.info) {
-            dbStatSize.textContent = json.info.fileSizeFormatted;
-            dbStatReports.textContent = json.info.totalReports;
-            dbStatRecords.textContent = json.info.totalRecords.toLocaleString('id-ID');
-            dbStatRange.textContent = json.info.totalReports > 0
-              ? `${formatDateDisplay(json.info.firstDate)} s/d ${formatDateDisplay(json.info.latestDate)}`
-              : '-';
-          }
-        }
-      } catch (e) {
-        console.warn('Gagal memuat info database', e);
-      }
-
-      // 2. Fetch Dates List
-      try {
-        dbReportsList.innerHTML = '<div style="text-align: center; padding: 25px 10px; color: var(--text-muted);">Memuat riwayat...</div>';
-        const res = await fetch('/api/dates');
-        if (res.ok) {
-          const json = await res.json();
-          if (json.success && Array.isArray(json.dates)) {
-            if (json.dates.length === 0) {
-              dbReportsList.innerHTML = '<div style="text-align: center; padding: 30px 10px; color: var(--text-muted); font-style: italic;">Belum ada laporan yang tersimpan di database. Silakan unggah file CSV.</div>';
-              return;
-            }
-
-            dbReportsList.innerHTML = '';
-            json.dates.forEach(d => {
-              const card = document.createElement('div');
-              card.className = 'report-item-card';
-              const dateDisplay = formatDateDisplay(d.report_date);
-              const totalStockFmt = (d.total_stock || 0).toLocaleString('id-ID') + ' PCS';
-              const createdDate = d.created_at ? new Date(d.created_at).toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'short' }) : '-';
-
-              card.innerHTML = `
-                <div class="report-item-header">
-                  <div class="report-item-date">
-                    <i data-lucide="calendar" style="width: 14px; height: 14px;"></i> ${dateDisplay}
-                  </div>
-                  <span class="badge-stock">${totalStockFmt}</span>
-                </div>
-                <div class="report-item-meta">
-                  <span>${escapeHtml(d.filename || 'Laporan')}</span> &bull; <span>${d.total_merks || 0} merk / ${d.total_items || 0} item</span>
-                </div>
-                <div class="report-item-actions">
-                  <button class="btn-mini-primary" data-action="view" data-date="${d.report_date}">
-                    <i data-lucide="eye" style="width: 13px; height: 13px;"></i> Buka di Tabel
-                  </button>
-                  <button class="btn-mini-danger" data-action="delete" data-date="${d.report_date}">
-                    <i data-lucide="trash-2" style="width: 13px; height: 13px;"></i> Hapus
-                  </button>
-                </div>
-              `;
-              dbReportsList.appendChild(card);
-            });
-
-            lucide.createIcons();
-
-            // Bind action buttons
-            dbReportsList.querySelectorAll('button[data-action="view"]').forEach(btn => {
-              btn.addEventListener('click', () => {
-                const date = btn.getAttribute('data-date');
-                closeSidebar();
-                loadStockByDate(date);
-              });
-            });
-
-            dbReportsList.querySelectorAll('button[data-action="delete"]').forEach(btn => {
-              btn.addEventListener('click', async () => {
-                const date = btn.getAttribute('data-date');
-                if (confirm(`Hapus laporan tanggal ${formatDateDisplay(date)} dari database?`)) {
-                  try {
-                    const delRes = await fetch(`/api/report?date=${encodeURIComponent(date)}`, { method: 'DELETE' });
-                    const delJson = await delRes.json();
-                    if (delJson.success) {
-                      loadSidebarData();
-                      checkBackendAndLoad();
-                    } else {
-                      alert(delJson.message || 'Gagal menghapus');
-                    }
-                  } catch (err) {
-                    alert('Error: ' + err.message);
-                  }
-                }
-              });
-            });
-          }
-        }
-      } catch (e) {
-        dbReportsList.innerHTML = '<div style="text-align: center; color: var(--status-danger); padding: 20px;">Gagal memuat daftar riwayat.</div>';
-      }
-    }
 
     // Clear Database Handler
     if (btnClearDb) {
@@ -983,7 +931,7 @@ document.addEventListener('DOMContentLoaded', () => {
           const json = await res.json();
           if (json.success) {
             alert('Database berhasil dikosongkan!');
-            closeSidebar();
+            loadDatabaseInfo();
             checkBackendAndLoad();
           } else {
             alert(json.message || 'Gagal mengosongkan database');
@@ -1023,7 +971,7 @@ document.addEventListener('DOMContentLoaded', () => {
           const json = await res.json();
           if (res.ok && json.success) {
             alert('Database berhasil dipulihkan!');
-            closeSidebar();
+            loadDatabaseInfo();
             checkBackendAndLoad();
           } else {
             alert(json.message || 'Gagal memulihkan database');
@@ -1034,6 +982,117 @@ document.addEventListener('DOMContentLoaded', () => {
           restoreFileInput.value = '';
         }
       });
+    }
+  }
+
+  // Loads stats + report history for the "Kelola Database" tab (lazy-loaded on tab click)
+  async function loadDatabaseInfo() {
+    const dbStatSize = document.getElementById('db-stat-size');
+    const dbStatReports = document.getElementById('db-stat-reports');
+    const dbStatRecords = document.getElementById('db-stat-records');
+    const dbStatRange = document.getElementById('db-stat-range');
+    const dbReportsList = document.getElementById('db-reports-list');
+    if (!dbReportsList) return;
+
+    if (!appState.isBackendAvailable) {
+      dbReportsList.innerHTML = '<div style="text-align: center; padding: 30px 10px; color: var(--text-muted); font-style: italic;">Fitur manajemen database hanya aktif saat server backend berjalan (port 3000). Silakan jalankan "npm start" atau deploy di ZimaOS.</div>';
+      return;
+    }
+
+    // 1. Fetch Database Info
+    try {
+      const res = await fetch('/api/database/info');
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.info) {
+          dbStatSize.textContent = json.info.fileSizeFormatted;
+          dbStatReports.textContent = json.info.totalReports;
+          dbStatRecords.textContent = json.info.totalRecords.toLocaleString('id-ID');
+          dbStatRange.textContent = json.info.totalReports > 0
+            ? `${formatDateDisplay(json.info.stockRange.first)} s/d ${formatDateDisplay(json.info.stockRange.latest)}`
+            : '-';
+        }
+      }
+    } catch (e) {
+      console.warn('Gagal memuat info database', e);
+    }
+
+    // 2. Fetch Dates List
+    try {
+      dbReportsList.innerHTML = '<div style="text-align: center; padding: 25px 10px; color: var(--text-muted);">Memuat riwayat...</div>';
+      const res = await fetch('/api/dates');
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && Array.isArray(json.dates)) {
+          if (json.dates.length === 0) {
+            dbReportsList.innerHTML = '<div style="text-align: center; padding: 30px 10px; color: var(--text-muted); font-style: italic;">Belum ada laporan yang tersimpan di database. Silakan unggah file CSV.</div>';
+            return;
+          }
+
+          dbReportsList.innerHTML = '';
+          json.dates.forEach(d => {
+            const card = document.createElement('div');
+            card.className = 'report-item-card';
+            const dateDisplay = formatDateDisplay(d.report_date);
+            const totalStockFmt = (d.total_stock || 0).toLocaleString('id-ID') + ' PCS';
+
+            card.innerHTML = `
+              <div class="report-item-header">
+                <div class="report-item-date">
+                  <i data-lucide="calendar" style="width: 14px; height: 14px;"></i> ${dateDisplay}
+                </div>
+                <span class="badge-stock">${totalStockFmt}</span>
+              </div>
+              <div class="report-item-meta">
+                <span>${escapeHtml(d.filename || 'Laporan')}</span> &bull; <span>${d.total_merks || 0} merk / ${d.total_items || 0} item</span>
+              </div>
+              <div class="report-item-actions">
+                <button class="btn-mini-primary" data-action="view" data-date="${d.report_date}">
+                  <i data-lucide="eye" style="width: 13px; height: 13px;"></i> Buka di Tabel
+                </button>
+                <button class="btn-mini-danger" data-action="delete" data-date="${d.report_date}">
+                  <i data-lucide="trash-2" style="width: 13px; height: 13px;"></i> Hapus
+                </button>
+              </div>
+            `;
+            dbReportsList.appendChild(card);
+          });
+
+          lucide.createIcons();
+
+          // Bind action buttons
+          dbReportsList.querySelectorAll('button[data-action="view"]').forEach(btn => {
+            btn.addEventListener('click', () => {
+              const date = btn.getAttribute('data-date');
+              const stockTabBtn = document.querySelector('.tab-btn[data-tab="stock-matrix"]');
+              if (stockTabBtn) stockTabBtn.click();
+              loadStockByDate(date);
+            });
+          });
+
+          dbReportsList.querySelectorAll('button[data-action="delete"]').forEach(btn => {
+            btn.addEventListener('click', async () => {
+              const date = btn.getAttribute('data-date');
+              if (confirm(`Hapus laporan tanggal ${formatDateDisplay(date)} dari database?`)) {
+                try {
+                  const delRes = await fetch(`/api/report?date=${encodeURIComponent(date)}`, { method: 'DELETE' });
+                  const delJson = await delRes.json();
+                  if (delJson.success) {
+                    loadDatabaseInfo();
+                    checkBackendAndLoad();
+                  } else {
+                    alert(delJson.message || 'Gagal menghapus');
+                  }
+                } catch (err) {
+                  alert('Error: ' + err.message);
+                }
+              }
+            });
+          });
+        }
+      }
+    } catch (e) {
+      dbReportsList.innerHTML = '<div style="text-align: center; color: var(--status-danger); padding: 20px;">Gagal memuat daftar riwayat.</div>';
     }
   }
 
@@ -1051,7 +1110,13 @@ document.addEventListener('DOMContentLoaded', () => {
       'stock-matrix': 'Matriks Stok Cabang',
       'rebalance': 'Saran Transfer Cabang',
       'coverage': 'Ketahanan Stok (DoC)',
-      'po-planner': 'Rencana Belanja (PO)'
+      'po-planner': 'Rencana Belanja (PO)',
+      'stockout-history': 'Riwayat Stockout',
+      'abc-aging': 'ABC & Aging Stok',
+      'outlet-performance': 'Performa Cabang',
+      'vendor-analysis': 'Supplier / Vendor',
+      'database': 'Kelola Database',
+      'import': 'Import Database'
     };
 
     tabBtns.forEach(btn => {
@@ -1086,7 +1151,17 @@ document.addEventListener('DOMContentLoaded', () => {
           loadCoverageData();
         } else if (targetTab === 'po-planner') {
           loadPOData();
-        } else if (targetTab === 'import-center') {
+        } else if (targetTab === 'stockout-history') {
+          loadStockoutHistoryData();
+        } else if (targetTab === 'abc-aging') {
+          loadABCAgingData();
+        } else if (targetTab === 'outlet-performance') {
+          loadOutletPerformanceData();
+        } else if (targetTab === 'vendor-analysis') {
+          loadVendorAnalysisData();
+        } else if (targetTab === 'database') {
+          loadDatabaseInfo();
+        } else if (targetTab === 'import') {
           loadImportBatches();
         }
 
@@ -1160,63 +1235,6 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
   }
-
-    // ============================================================
-    // IMPORT DATABASE SIDEBAR DRAWER CONTROLLER
-    // ============================================================
-    const importSidebar = document.getElementById('import-sidebar');
-    const importSidebarOverlay = document.getElementById('import-sidebar-overlay');
-    const btnCloseImportSidebar = document.getElementById('btn-close-import-sidebar');
-    const btnHeaderImport = document.getElementById('btn-header-import');
-    const btnSidebarImport = document.getElementById('btn-sidebar-import');
-
-    function openImportSidebar() {
-      if (!importSidebar) return;
-      if (importSidebarOverlay) importSidebarOverlay.style.display = 'block';
-      setTimeout(() => {
-        if (importSidebarOverlay) importSidebarOverlay.classList.add('active');
-        importSidebar.classList.add('active');
-      }, 10);
-      loadImportBatches();
-      if (window.lucide) {
-        setTimeout(() => lucide.createIcons(), 50);
-      }
-    }
-
-    function closeImportSidebar() {
-      if (!importSidebar) return;
-      if (importSidebarOverlay) importSidebarOverlay.classList.remove('active');
-      importSidebar.classList.remove('active');
-      setTimeout(() => {
-        if (importSidebarOverlay) importSidebarOverlay.style.display = 'none';
-      }, 300);
-    }
-
-    if (btnHeaderImport) {
-      btnHeaderImport.addEventListener('click', openImportSidebar);
-    }
-
-    if (btnSidebarImport) {
-      btnSidebarImport.addEventListener('click', () => {
-        const btnCloseDbSidebar = document.getElementById('btn-close-sidebar');
-        if (btnCloseDbSidebar) btnCloseDbSidebar.click();
-        openImportSidebar();
-      });
-    }
-
-    if (btnCloseImportSidebar) {
-      btnCloseImportSidebar.addEventListener('click', closeImportSidebar);
-    }
-
-    if (importSidebarOverlay) {
-      importSidebarOverlay.addEventListener('click', closeImportSidebar);
-    }
-
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && importSidebar && importSidebar.classList.contains('active')) {
-        closeImportSidebar();
-      }
-    });
 
   // ============================================================
   // TAB 2: SMART REBALANCING (TRANSFER ANTAR-CABANG)
@@ -1642,7 +1660,564 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ============================================================
-  // TAB 5: MULTI-TYPE IMPORT CENTER
+  // TAB 5: RIWAYAT STOCKOUT (POLA KEBIASAAN & BARANG KRONIS)
+  // Tracks, across the daily stock reports uploaded over time, which items
+  // are both fast-moving (high ADS) AND frequently out of stock — the
+  // "sering laku tapi sering kosong" chronic problem items.
+  // ============================================================
+  let stockoutData = null;
+
+  async function loadStockoutHistoryData() {
+    const tableBody = document.getElementById('stockout-table-body');
+    if (!tableBody) return;
+
+    try {
+      tableBody.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 40px; color: var(--text-muted);"><i data-lucide="loader-2" class="spin"></i> Memuat riwayat stockout...</td></tr>`;
+      if (window.lucide) lucide.createIcons();
+
+      const days = document.getElementById('stockout-days-filter')?.value || 30;
+      const res = await fetch(`/api/analytics/stockout-history?days=${encodeURIComponent(days)}`);
+      const json = await res.json();
+
+      if (!json.success || !json.data) throw new Error(json.message || 'Gagal mengambil data riwayat stockout');
+
+      stockoutData = json.data;
+      populateStockoutMerkFilter(stockoutData.items);
+      renderStockoutTable();
+    } catch (err) {
+      console.error('Stockout history load error:', err);
+      tableBody.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 40px; color: var(--status-danger);">Gagal memuat riwayat stockout: ${err.message}</td></tr>`;
+    }
+  }
+
+  function populateStockoutMerkFilter(items) {
+    const filter = document.getElementById('stockout-merk-filter');
+    if (!filter) return;
+    const currentVal = filter.value;
+    const merks = new Set(items.map(i => i.merk).filter(Boolean));
+
+    filter.innerHTML = '<option value="ALL">-- Semua Merk --</option>';
+    Array.from(merks).sort().forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = m;
+      filter.appendChild(opt);
+    });
+    if (merks.has(currentVal)) filter.value = currentVal;
+  }
+
+  function classifyStockoutStatus(item) {
+    if (item.isChronic) return 'CHRONIC';
+    if (item.avgStockoutRate >= 10) return 'WATCH';
+    return 'SAFE';
+  }
+
+  function renderStockoutTable() {
+    const tableBody = document.getElementById('stockout-table-body');
+    if (!tableBody || !stockoutData || !stockoutData.items) return;
+
+    const items = stockoutData.items;
+
+    // KPI summary always reflects the full (unfiltered) dataset for the selected period
+    const chronicCount = items.filter(i => i.isChronic).length;
+    const avgRate = items.length > 0
+      ? +(items.reduce((s, i) => s + i.avgStockoutRate, 0) / items.length).toFixed(1)
+      : 0;
+    const worstOutletEntry = stockoutData.outletSummary && stockoutData.outletSummary[0];
+
+    const statItems = document.getElementById('stat-stockout-items');
+    const statChronic = document.getElementById('stat-stockout-chronic');
+    const statAvgRate = document.getElementById('stat-stockout-avgrate');
+    const statWorstOutlet = document.getElementById('stat-stockout-worstoutlet');
+    const badge = document.getElementById('badge-stockout-count');
+
+    if (statItems) statItems.textContent = items.length.toLocaleString('id-ID');
+    if (statChronic) statChronic.textContent = chronicCount.toLocaleString('id-ID');
+    if (statAvgRate) statAvgRate.textContent = `${avgRate}%`;
+    if (statWorstOutlet) statWorstOutlet.textContent = worstOutletEntry ? `${worstOutletEntry.outlet} (${worstOutletEntry.totalStockoutDays} hr)` : '-';
+    if (badge) badge.textContent = chronicCount;
+
+    const statusFilter = document.getElementById('stockout-status-filter')?.value || 'ALL';
+    const merkFilter = document.getElementById('stockout-merk-filter')?.value || 'ALL';
+    const query = (document.getElementById('stockout-search-input')?.value || '').toLowerCase().trim();
+
+    const filtered = items.filter(item => {
+      if (statusFilter !== 'ALL' && classifyStockoutStatus(item) !== statusFilter) return false;
+      if (merkFilter !== 'ALL' && item.merk !== merkFilter) return false;
+      if (query && !item.name.toLowerCase().includes(query) && !item.code.toLowerCase().includes(query)) return false;
+      return true;
+    });
+
+    if (filtered.length === 0) {
+      tableBody.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 40px; color: var(--text-muted);">Tidak ada data yang sesuai filter riwayat stockout.</td></tr>`;
+      return;
+    }
+
+    let rowsHtml = '';
+    filtered.forEach((item, idx) => {
+      const status = classifyStockoutStatus(item);
+      const statusBadge = status === 'CHRONIC'
+        ? `<span class="status-badge badge-high-urgency">🔴 KRONIS</span>`
+        : status === 'WATCH'
+          ? `<span class="status-badge badge-med-urgency">🟡 WASPADA</span>`
+          : `<span class="status-badge" style="background: rgba(16, 185, 129, 0.12); color: var(--status-success);">🟢 AMAN</span>`;
+
+      const rateColor = item.avgStockoutRate >= 20 ? 'var(--status-danger)' : (item.avgStockoutRate >= 10 ? 'var(--status-warning)' : 'var(--status-success)');
+
+      const problemOutlets = item.outletDetails.filter(o => o.daysOutOfStock > 0);
+      let outletBadges = problemOutlets.slice(0, 4)
+        .map(o => `<span class="status-badge badge-critical">${escapeHtml(o.outlet)}: ${o.daysOutOfStock} hr</span>`)
+        .join(' ');
+      if (problemOutlets.length > 4) outletBadges += ` <span style="color: var(--text-muted); font-size: 11px;">+${problemOutlets.length - 4}</span>`;
+      if (!outletBadges) outletBadges = '<span style="color: var(--text-muted); font-size: 11px;">Tidak pernah kosong</span>';
+
+      rowsHtml += `
+        <tr>
+          <td style="text-align: center; color: var(--text-muted);">${idx + 1}</td>
+          <td style="font-family: monospace; font-size: 12px;">${escapeHtml(item.code)}</td>
+          <td style="font-weight: 700;">${escapeHtml(item.name)}</td>
+          <td><span style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(item.merk || '-')}</span></td>
+          <td style="text-align: right; font-weight: 700;">${item.totalSold.toLocaleString('id-ID')}</td>
+          <td style="text-align: right; color: var(--status-warning); font-weight: 700;">${item.ads}</td>
+          <td style="text-align: right; font-weight: 800; color: ${rateColor};">${item.avgStockoutRate}%</td>
+          <td style="font-size: 11.5px;">${escapeHtml(item.worstOutlet)}${item.maxDaysOutOfStock > 0 ? ` (${item.maxDaysOutOfStock} hr)` : ''}</td>
+          <td style="text-align: center;">${statusBadge}</td>
+          <td style="font-size: 11.5px;">${outletBadges}</td>
+        </tr>
+      `;
+    });
+
+    tableBody.innerHTML = rowsHtml;
+  }
+
+  function setupStockoutControls() {
+    const daysFilter = document.getElementById('stockout-days-filter');
+    const statusFilter = document.getElementById('stockout-status-filter');
+    const merkFilter = document.getElementById('stockout-merk-filter');
+    const searchInput = document.getElementById('stockout-search-input');
+    const btnExport = document.getElementById('btn-export-stockout');
+
+    if (daysFilter) daysFilter.addEventListener('change', loadStockoutHistoryData);
+    if (statusFilter) statusFilter.addEventListener('change', renderStockoutTable);
+    if (merkFilter) merkFilter.addEventListener('change', renderStockoutTable);
+    if (searchInput) searchInput.addEventListener('input', renderStockoutTable);
+
+    if (btnExport) {
+      btnExport.addEventListener('click', () => {
+        if (!stockoutData || !stockoutData.items || stockoutData.items.length === 0) {
+          alert('Tidak ada data riwayat stockout untuk diekspor.');
+          return;
+        }
+
+        const dataToExport = stockoutData.items.map((item, i) => ({
+          'No': i + 1,
+          'Kode Item': item.code,
+          'Nama Barang': item.name,
+          'Merk': item.merk,
+          'Total Terjual': item.totalSold,
+          'Penjualan/Hari (ADS)': item.ads,
+          'Rata-rata Kekosongan (%)': item.avgStockoutRate,
+          'Cabang Terparah': item.worstOutlet,
+          'Hari Kosong Terparah': item.maxDaysOutOfStock,
+          'Status': item.isChronic ? 'Kronis' : (item.avgStockoutRate >= 10 ? 'Waspada' : 'Aman')
+        }));
+
+        const ws = XLSX.utils.json_to_sheet(dataToExport);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Riwayat_Stockout');
+        const filename = `Riwayat_Stockout_${stockoutData.days}hari.xlsx`;
+        XLSX.writeFile(wb, filename);
+      });
+    }
+  }
+
+  // ============================================================
+  // TAB 6: ANALISA ABC & AGING STOK
+  // ============================================================
+  let abcAgingData = null;
+
+  async function loadABCAgingData() {
+    const tableBody = document.getElementById('abc-table-body');
+    if (!tableBody) return;
+
+    try {
+      tableBody.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 40px; color: var(--text-muted);"><i data-lucide="loader-2" class="spin"></i> Memuat analisa ABC & aging stok...</td></tr>`;
+      if (window.lucide) lucide.createIcons();
+
+      const days = document.getElementById('abc-days-filter')?.value || 90;
+      const res = await fetch(`/api/analytics/abc-aging?days=${encodeURIComponent(days)}`);
+      const json = await res.json();
+
+      if (!json.success || !json.data) throw new Error(json.message || 'Gagal mengambil data ABC & aging');
+
+      abcAgingData = json.data;
+      renderABCTable();
+    } catch (err) {
+      console.error('ABC/Aging load error:', err);
+      tableBody.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 40px; color: var(--status-danger);">Gagal memuat analisa: ${err.message}</td></tr>`;
+    }
+  }
+
+  const AGING_BUCKET_BADGES = {
+    FRESH: '<span class="status-badge" style="background: rgba(16, 185, 129, 0.12); color: var(--status-success);">🟢 Segar</span>',
+    AGING_30_60: '<span class="status-badge badge-med-urgency">🟡 31-60 Hr</span>',
+    AGING_60_90: '<span class="status-badge" style="background: rgba(245, 158, 11, 0.15); color: var(--status-warning);">🟠 61-90 Hr</span>',
+    DEAD_STOCK: '<span class="status-badge badge-high-urgency">🔴 Dead Stock</span>',
+    NEVER_SOLD: '<span class="status-badge" style="background: rgba(107, 114, 128, 0.15); color: var(--text-muted);">⚪ Belum Pernah</span>'
+  };
+
+  function renderABCTable() {
+    const tableBody = document.getElementById('abc-table-body');
+    if (!tableBody || !abcAgingData || !abcAgingData.items) return;
+
+    const items = abcAgingData.items;
+    const classACount = items.filter(i => i.abcClass === 'A').length;
+    const deadStockItems = items.filter(i => i.agingBucket === 'DEAD_STOCK');
+    const neverSoldItems = items.filter(i => i.agingBucket === 'NEVER_SOLD');
+    const deadValue = deadStockItems.reduce((s, i) => s + i.estimatedValue, 0) + neverSoldItems.reduce((s, i) => s + i.estimatedValue, 0);
+
+    const statDeadValue = document.getElementById('stat-abc-deadvalue');
+    const statClassA = document.getElementById('stat-abc-classa');
+    const statDeadCount = document.getElementById('stat-abc-deadcount');
+    const statNeverSold = document.getElementById('stat-abc-neversold');
+    const badge = document.getElementById('badge-deadstock-count');
+
+    if (statDeadValue) statDeadValue.textContent = `Rp ${deadValue.toLocaleString('id-ID')}`;
+    if (statClassA) statClassA.textContent = classACount.toLocaleString('id-ID');
+    if (statDeadCount) statDeadCount.textContent = deadStockItems.length.toLocaleString('id-ID');
+    if (statNeverSold) statNeverSold.textContent = neverSoldItems.length.toLocaleString('id-ID');
+    if (badge) badge.textContent = deadStockItems.length + neverSoldItems.length;
+
+    const classFilter = document.getElementById('abc-class-filter')?.value || 'ALL';
+    const agingFilter = document.getElementById('abc-aging-filter')?.value || 'ALL';
+    const query = (document.getElementById('abc-search-input')?.value || '').toLowerCase().trim();
+
+    const filtered = items.filter(item => {
+      if (classFilter !== 'ALL' && item.abcClass !== classFilter) return false;
+      if (agingFilter !== 'ALL' && item.agingBucket !== agingFilter) return false;
+      if (query && !item.name.toLowerCase().includes(query) && !item.code.toLowerCase().includes(query)) return false;
+      return true;
+    });
+
+    if (filtered.length === 0) {
+      tableBody.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 40px; color: var(--text-muted);">Tidak ada data yang sesuai filter.</td></tr>`;
+      return;
+    }
+
+    let rowsHtml = '';
+    filtered.forEach((item, idx) => {
+      const classColor = item.abcClass === 'A' ? 'var(--status-success)' : item.abcClass === 'B' ? 'var(--status-warning)' : item.abcClass === 'C' ? 'var(--text-secondary)' : 'var(--text-muted)';
+      const agingCell = `${AGING_BUCKET_BADGES[item.agingBucket] || ''}${!item.neverSold ? `<div style="margin-top: 3px; color: var(--text-secondary); font-size: 11px;">${item.agingDays} hari</div>` : ''}`;
+
+      rowsHtml += `
+        <tr>
+          <td style="text-align: center; color: var(--text-muted);">${idx + 1}</td>
+          <td style="font-family: monospace; font-size: 12px;">${escapeHtml(item.code)}</td>
+          <td style="font-weight: 700;">${escapeHtml(item.name)}</td>
+          <td><span style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(item.merk || '-')}</span></td>
+          <td style="text-align: right; font-weight: 700;">${item.currentStock.toLocaleString('id-ID')}</td>
+          <td style="text-align: center; font-weight: 800; color: ${classColor};">${item.abcClass}</td>
+          <td style="text-align: right; color: var(--status-success);">Rp ${item.revenueInWindow.toLocaleString('id-ID')}</td>
+          <td style="font-size: 11.5px;">${item.neverSold ? '-' : formatDateDisplay(item.lastSaleDate)}</td>
+          <td style="text-align: right;">${agingCell}</td>
+          <td style="text-align: right; font-weight: 800; color: var(--accent-cyan);">Rp ${item.estimatedValue.toLocaleString('id-ID')}</td>
+        </tr>
+      `;
+    });
+
+    tableBody.innerHTML = rowsHtml;
+  }
+
+  function setupABCControls() {
+    const daysFilter = document.getElementById('abc-days-filter');
+    const classFilter = document.getElementById('abc-class-filter');
+    const agingFilter = document.getElementById('abc-aging-filter');
+    const searchInput = document.getElementById('abc-search-input');
+    const btnExport = document.getElementById('btn-export-abc');
+
+    if (daysFilter) daysFilter.addEventListener('change', loadABCAgingData);
+    if (classFilter) classFilter.addEventListener('change', renderABCTable);
+    if (agingFilter) agingFilter.addEventListener('change', renderABCTable);
+    if (searchInput) searchInput.addEventListener('input', renderABCTable);
+
+    if (btnExport) {
+      btnExport.addEventListener('click', () => {
+        if (!abcAgingData || !abcAgingData.items || abcAgingData.items.length === 0) {
+          alert('Tidak ada data ABC & aging untuk diekspor.');
+          return;
+        }
+        const dataToExport = abcAgingData.items.map((item, i) => ({
+          'No': i + 1,
+          'Kode Item': item.code,
+          'Nama Barang': item.name,
+          'Merk': item.merk,
+          'Stok Saat Ini': item.currentStock,
+          'Kelas ABC': item.abcClass,
+          'Kontribusi Omzet': item.revenueInWindow,
+          'Terakhir Terjual': item.neverSold ? 'Belum Pernah' : item.lastSaleDate,
+          'Umur Stok (Hari)': item.neverSold ? '-' : item.agingDays,
+          'Status Aging': item.agingBucket,
+          'Estimasi Nilai Tertahan': item.estimatedValue
+        }));
+        const ws = XLSX.utils.json_to_sheet(dataToExport);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'ABC_Aging_Stok');
+        const filename = `Analisa_ABC_Aging_${abcAgingData.days}hari.xlsx`;
+        XLSX.writeFile(wb, filename);
+      });
+    }
+  }
+
+  // ============================================================
+  // TAB 7: PERBANDINGAN PERFORMA ANTAR-CABANG
+  // ============================================================
+  let outletPerfData = null;
+
+  async function loadOutletPerformanceData() {
+    const tableBody = document.getElementById('outlet-table-body');
+    if (!tableBody) return;
+
+    try {
+      tableBody.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 40px; color: var(--text-muted);"><i data-lucide="loader-2" class="spin"></i> Memuat performa cabang...</td></tr>`;
+      if (window.lucide) lucide.createIcons();
+
+      const days = document.getElementById('outlet-days-filter')?.value || 30;
+      const res = await fetch(`/api/analytics/outlet-performance?days=${encodeURIComponent(days)}`);
+      const json = await res.json();
+
+      if (!json.success || !json.data) throw new Error(json.message || 'Gagal mengambil data performa cabang');
+
+      outletPerfData = json.data;
+      renderOutletTable();
+    } catch (err) {
+      console.error('Outlet performance load error:', err);
+      tableBody.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 40px; color: var(--status-danger);">Gagal memuat performa cabang: ${err.message}</td></tr>`;
+    }
+  }
+
+  function renderOutletTable() {
+    const tableBody = document.getElementById('outlet-table-body');
+    if (!tableBody || !outletPerfData || !outletPerfData.outlets) return;
+
+    const outlets = outletPerfData.outlets;
+    const topOutlet = outlets[0];
+    const attentionCount = outlets.filter(o => o.needsAttention).length;
+
+    const statTop = document.getElementById('stat-outlet-top');
+    const statAttention = document.getElementById('stat-outlet-attention');
+    const statRevenue = document.getElementById('stat-outlet-revenue');
+    const statAvgStockout = document.getElementById('stat-outlet-avgstockout');
+
+    if (statTop) statTop.textContent = topOutlet ? topOutlet.outlet : '-';
+    if (statAttention) statAttention.textContent = attentionCount;
+    if (statRevenue) statRevenue.textContent = `Rp ${outletPerfData.totalNetworkRevenue.toLocaleString('id-ID')}`;
+    if (statAvgStockout) statAvgStockout.textContent = `${outletPerfData.avgStockoutRate}%`;
+
+    const statusFilter = document.getElementById('outlet-status-filter')?.value || 'ALL';
+    const query = (document.getElementById('outlet-search-input')?.value || '').toLowerCase().trim();
+
+    const filtered = outlets.filter(o => {
+      if (statusFilter === 'ATTENTION' && !o.needsAttention) return false;
+      if (query && !o.outlet.toLowerCase().includes(query)) return false;
+      return true;
+    });
+
+    if (filtered.length === 0) {
+      tableBody.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 40px; color: var(--text-muted);">Tidak ada cabang yang sesuai filter.</td></tr>`;
+      return;
+    }
+
+    let rowsHtml = '';
+    filtered.forEach(o => {
+      const statusBadge = o.needsAttention
+        ? `<span class="status-badge badge-high-urgency">🔴 Perlu Perhatian</span>`
+        : `<span class="status-badge" style="background: rgba(16, 185, 129, 0.12); color: var(--status-success);">🟢 Sehat</span>`;
+
+      rowsHtml += `
+        <tr>
+          <td style="text-align: center; color: var(--text-muted); font-weight: 700;">#${o.rank}</td>
+          <td style="font-weight: 700;">${escapeHtml(o.outlet)}</td>
+          <td style="text-align: right; font-weight: 700; color: var(--status-success);">Rp ${o.revenue.toLocaleString('id-ID')}</td>
+          <td style="text-align: right;">Rp ${o.profit.toLocaleString('id-ID')}</td>
+          <td style="text-align: right;">${o.qty.toLocaleString('id-ID')}</td>
+          <td style="text-align: right;">${o.txCount.toLocaleString('id-ID')}</td>
+          <td style="text-align: right;">${o.currentStock.toLocaleString('id-ID')}</td>
+          <td style="text-align: right; font-weight: 700; color: var(--accent-cyan);">${o.revenueSharePct}%</td>
+          <td style="text-align: right; font-weight: 700; color: ${o.stockoutRate >= 20 ? 'var(--status-danger)' : 'var(--text-primary)'};">${o.stockoutRate}%</td>
+          <td style="text-align: center;">${statusBadge}</td>
+        </tr>
+      `;
+    });
+
+    tableBody.innerHTML = rowsHtml;
+  }
+
+  function setupOutletPerformanceControls() {
+    const daysFilter = document.getElementById('outlet-days-filter');
+    const statusFilter = document.getElementById('outlet-status-filter');
+    const searchInput = document.getElementById('outlet-search-input');
+    const btnExport = document.getElementById('btn-export-outlet');
+
+    if (daysFilter) daysFilter.addEventListener('change', loadOutletPerformanceData);
+    if (statusFilter) statusFilter.addEventListener('change', renderOutletTable);
+    if (searchInput) searchInput.addEventListener('input', renderOutletTable);
+
+    if (btnExport) {
+      btnExport.addEventListener('click', () => {
+        if (!outletPerfData || !outletPerfData.outlets || outletPerfData.outlets.length === 0) {
+          alert('Tidak ada data performa cabang untuk diekspor.');
+          return;
+        }
+        const dataToExport = outletPerfData.outlets.map(o => ({
+          'Rank': o.rank,
+          'Cabang': o.outlet,
+          'Omzet': o.revenue,
+          'Profit': o.profit,
+          'Qty Terjual': o.qty,
+          'Jumlah Transaksi': o.txCount,
+          'Stok Saat Ini': o.currentStock,
+          'Kontribusi Omzet (%)': o.revenueSharePct,
+          'Tingkat Kekosongan (%)': o.stockoutRate,
+          'Status': o.needsAttention ? 'Perlu Perhatian' : 'Sehat'
+        }));
+        const ws = XLSX.utils.json_to_sheet(dataToExport);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Performa_Cabang');
+        const filename = `Performa_Cabang_${outletPerfData.days}hari.xlsx`;
+        XLSX.writeFile(wb, filename);
+      });
+    }
+  }
+
+  // ============================================================
+  // TAB 8: TRACKING SUPPLIER / VENDOR
+  // ============================================================
+  let vendorAnalysisData = null;
+
+  async function loadVendorAnalysisData() {
+    const tableBody = document.getElementById('vendor-table-body');
+    if (!tableBody) return;
+
+    try {
+      tableBody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);"><i data-lucide="loader-2" class="spin"></i> Memuat rekap vendor...</td></tr>`;
+      if (window.lucide) lucide.createIcons();
+
+      const days = document.getElementById('vendor-days-filter')?.value || 90;
+      const res = await fetch(`/api/analytics/vendor-analysis?days=${encodeURIComponent(days)}`);
+      const json = await res.json();
+
+      if (!json.success || !json.data) throw new Error(json.message || 'Gagal mengambil data vendor');
+
+      vendorAnalysisData = json.data;
+      renderVendorTable();
+    } catch (err) {
+      console.error('Vendor analysis load error:', err);
+      tableBody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 40px; color: var(--status-danger);">Gagal memuat rekap vendor: ${err.message}</td></tr>`;
+    }
+  }
+
+  function renderVendorTable() {
+    const tableBody = document.getElementById('vendor-table-body');
+    const gapTableBody = document.getElementById('vendor-pricegap-table-body');
+    if (!tableBody || !vendorAnalysisData) return;
+
+    const vendors = vendorAnalysisData.vendors || [];
+    const priceGapItems = vendorAnalysisData.priceGapItems || [];
+    const totalSpend = vendors.reduce((s, v) => s + v.totalSpend, 0);
+    const biggestVendor = vendors[0];
+
+    const statCount = document.getElementById('stat-vendor-count');
+    const statSpend = document.getElementById('stat-vendor-spend');
+    const statBiggest = document.getElementById('stat-vendor-biggest');
+    const statPriceGap = document.getElementById('stat-vendor-pricegap');
+
+    if (statCount) statCount.textContent = vendors.length;
+    if (statSpend) statSpend.textContent = `Rp ${totalSpend.toLocaleString('id-ID')}`;
+    if (statBiggest) statBiggest.textContent = biggestVendor ? biggestVendor.vendor : '-';
+    if (statPriceGap) statPriceGap.textContent = priceGapItems.length;
+
+    const query = (document.getElementById('vendor-search-input')?.value || '').toLowerCase().trim();
+    const filtered = vendors.filter(v => !query || v.vendor.toLowerCase().includes(query));
+
+    if (filtered.length === 0) {
+      tableBody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);">Tidak ada vendor yang sesuai filter.</td></tr>`;
+    } else {
+      let rowsHtml = '';
+      filtered.forEach((v, idx) => {
+        rowsHtml += `
+          <tr>
+            <td style="text-align: center; color: var(--text-muted);">${idx + 1}</td>
+            <td style="font-weight: 700;">${escapeHtml(v.vendor)}</td>
+            <td style="text-align: right;">${v.itemsSuppliedCount.toLocaleString('id-ID')}</td>
+            <td style="text-align: right;">${v.totalQty.toLocaleString('id-ID')}</td>
+            <td style="text-align: right; font-weight: 700; color: var(--status-success);">Rp ${v.totalSpend.toLocaleString('id-ID')}</td>
+            <td style="text-align: right;">${v.invoiceCount.toLocaleString('id-ID')}</td>
+            <td style="font-size: 11.5px;">${formatDateDisplay(v.lastPurchaseDate)}</td>
+            <td style="text-align: right; font-weight: 700; color: var(--accent-cyan);">${v.cheapestOnCount}</td>
+          </tr>
+        `;
+      });
+      tableBody.innerHTML = rowsHtml;
+    }
+
+    if (gapTableBody) {
+      if (priceGapItems.length === 0) {
+        gapTableBody.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 30px; color: var(--text-muted);">Tidak ada selisih harga signifikan antar vendor untuk periode ini.</td></tr>`;
+      } else {
+        let gapHtml = '';
+        priceGapItems.forEach(g => {
+          gapHtml += `
+            <tr>
+              <td style="font-family: monospace; font-size: 12px;">${escapeHtml(g.itemCode)}</td>
+              <td style="font-weight: 700;">${escapeHtml(g.itemName)}</td>
+              <td style="color: var(--status-success);">${escapeHtml(g.cheapestVendor)}</td>
+              <td style="text-align: right;">Rp ${g.cheapestPrice.toLocaleString('id-ID')}</td>
+              <td style="color: var(--status-danger);">${escapeHtml(g.priciestVendor)}</td>
+              <td style="text-align: right;">Rp ${g.priciestPrice.toLocaleString('id-ID')}</td>
+              <td style="text-align: right; font-weight: 800; color: var(--status-warning);">+${g.spreadPct}%</td>
+            </tr>
+          `;
+        });
+        gapTableBody.innerHTML = gapHtml;
+      }
+    }
+  }
+
+  function setupVendorAnalysisControls() {
+    const daysFilter = document.getElementById('vendor-days-filter');
+    const searchInput = document.getElementById('vendor-search-input');
+    const btnExport = document.getElementById('btn-export-vendor');
+
+    if (daysFilter) daysFilter.addEventListener('change', loadVendorAnalysisData);
+    if (searchInput) searchInput.addEventListener('input', renderVendorTable);
+
+    if (btnExport) {
+      btnExport.addEventListener('click', () => {
+        if (!vendorAnalysisData || !vendorAnalysisData.vendors || vendorAnalysisData.vendors.length === 0) {
+          alert('Tidak ada data vendor untuk diekspor.');
+          return;
+        }
+        const dataToExport = vendorAnalysisData.vendors.map((v, i) => ({
+          'No': i + 1,
+          'Vendor': v.vendor,
+          'Item Disuplai': v.itemsSuppliedCount,
+          'Total Qty Dibeli': v.totalQty,
+          'Total Belanja': v.totalSpend,
+          'Jumlah Invoice': v.invoiceCount,
+          'Terakhir Beli': v.lastPurchaseDate,
+          'Item Termurah (Count)': v.cheapestOnCount
+        }));
+        const ws = XLSX.utils.json_to_sheet(dataToExport);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Rekap_Vendor');
+        const filename = `Rekap_Vendor_${vendorAnalysisData.days}hari.xlsx`;
+        XLSX.writeFile(wb, filename);
+      });
+    }
+  }
+
+  // ============================================================
+  // TAB 9: MULTI-TYPE IMPORT CENTER
   // ============================================================
   function setupImportCenter() {
     setupSpecificDropzone('dropzone-stock', 'input-file-stock', '/api/upload', 'stok');

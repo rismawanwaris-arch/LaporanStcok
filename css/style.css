@@ -653,6 +653,18 @@ body {
   border: 1px solid rgba(16, 185, 129, 0.2);
 }
 
+.card-icon.amber {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--status-warning);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
+.card-icon.danger {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--status-danger);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
 .card-details h3 {
   font-size: 13px;
   color: var(--text-secondary);
@@ -850,8 +862,7 @@ table.stock-table tbody td:first-child {
   left: 0;
   z-index: 5;
   background: var(--sticky-col-bg);
-  box-shadow: 2px 0 5px rgba(0, 0, 0, 0.05); /* subtle separation shadow */
-  transition: var(--transition-smooth);
+  border-right: 1px solid var(--panel-border); /* cheap separation line instead of box-shadow, which is costly to repaint on a large sticky table during scroll */
 }
 
 /* Make sure sticky first column highlights correctly on row hover */
@@ -1029,79 +1040,6 @@ footer a:hover {
 
 .sidebar-overlay.active {
   opacity: 1;
-}
-
-.sidebar-drawer {
-  position: fixed;
-  top: 0;
-  right: 0;
-  width: 440px;
-  max-width: 92vw;
-  height: 100vh;
-  background: var(--panel-bg);
-  border-left: 1px solid var(--panel-border);
-  box-shadow: -10px 0 35px rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(25px);
-  -webkit-backdrop-filter: blur(25px);
-  z-index: 10001;
-  display: flex;
-  flex-direction: column;
-  transform: translateX(100%);
-  transition: transform 0.32s cubic-bezier(0.16, 1, 0.3, 1);
-  box-sizing: border-box;
-}
-
-.sidebar-drawer.active {
-  transform: translateX(0);
-}
-
-.sidebar-header {
-  padding: 18px 22px;
-  border-bottom: 1px solid var(--panel-border);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background: rgba(255, 255, 255, 0.02);
-  flex-shrink: 0;
-}
-
-.sidebar-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 16.5px;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
-.sidebar-title i {
-  color: var(--accent-cyan);
-}
-
-.btn-close {
-  background: none;
-  border: none;
-  font-size: 26px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  line-height: 1;
-  padding: 2px 8px;
-  border-radius: 6px;
-  transition: var(--transition-smooth);
-}
-
-.btn-close:hover {
-  color: var(--status-danger);
-  background: rgba(239, 68, 68, 0.12);
-}
-
-.sidebar-body {
-  padding: 18px 20px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  flex: 1;
 }
 
 .sidebar-stats-grid {
@@ -1606,11 +1544,6 @@ footer a:hover {
   font-size: 11.5px;
   color: var(--text-secondary);
   margin-top: 4px;
-}
-
-.import-sidebar-drawer {
-  width: 480px;
-  max-width: 95vw;
 }
 
 
