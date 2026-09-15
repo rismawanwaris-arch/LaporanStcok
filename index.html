@@ -73,6 +73,31 @@
             <span class="nav-label">Rencana Belanja (PO)</span>
             <span class="tab-badge" id="badge-po-count">0</span>
           </button>
+          <button class="sidebar-nav-item tab-btn" data-tab="stockout-history" title="Riwayat Stockout">
+            <i data-lucide="history"></i>
+            <span class="nav-label">Riwayat Stockout</span>
+            <span class="tab-badge" id="badge-stockout-count">0</span>
+          </button>
+        </nav>
+      </div>
+
+      <!-- Navigation Section: Analisa Lanjutan -->
+      <div class="sidebar-nav-group">
+        <div class="sidebar-group-title">ANALISA LANJUTAN</div>
+        <nav class="sidebar-menu">
+          <button class="sidebar-nav-item tab-btn" data-tab="abc-aging" title="Analisa ABC & Aging Stok">
+            <i data-lucide="pie-chart"></i>
+            <span class="nav-label">ABC & Aging Stok</span>
+            <span class="tab-badge" id="badge-deadstock-count">0</span>
+          </button>
+          <button class="sidebar-nav-item tab-btn" data-tab="outlet-performance" title="Perbandingan Performa Cabang">
+            <i data-lucide="trophy"></i>
+            <span class="nav-label">Performa Cabang</span>
+          </button>
+          <button class="sidebar-nav-item tab-btn" data-tab="vendor-analysis" title="Tracking Supplier / Vendor">
+            <i data-lucide="truck"></i>
+            <span class="nav-label">Supplier / Vendor</span>
+          </button>
         </nav>
       </div>
 
@@ -80,11 +105,11 @@
       <div class="sidebar-nav-group">
         <div class="sidebar-group-title">DATA & DATABASE</div>
         <nav class="sidebar-menu">
-          <button id="btn-db-manage" class="sidebar-nav-item" title="Kelola Database Riwayat">
+          <button class="sidebar-nav-item tab-btn" data-tab="database" title="Kelola Database Riwayat">
             <i data-lucide="database"></i>
             <span class="nav-label">Kelola Database</span>
           </button>
-          <button id="btn-header-import" class="sidebar-nav-item" title="Buka Menu Import Database">
+          <button class="sidebar-nav-item tab-btn" data-tab="import" title="Import Data Baru">
             <i data-lucide="upload-cloud"></i>
             <span class="nav-label">Import Database</span>
           </button>
@@ -548,6 +573,655 @@
       </section>
     </div>
 
+    <!-- ============================================================ -->
+    <!-- TAB 5: RIWAYAT STOCKOUT (POLA KEBIASAAN & BARANG KRONIS)     -->
+    <!-- ============================================================ -->
+    <div id="tab-panel-stockout-history" class="tab-panel">
+
+      <!-- Stockout History KPI Summary -->
+      <section class="dashboard-grid">
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon cyan">
+            <i data-lucide="package-search"></i>
+          </div>
+          <div class="card-details">
+            <h3>Item Dipantau</h3>
+            <div id="stat-stockout-items" class="card-value">0</div>
+          </div>
+        </div>
+
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon purple">
+            <i data-lucide="flame"></i>
+          </div>
+          <div class="card-details">
+            <h3>Item Stockout Kronis</h3>
+            <div id="stat-stockout-chronic" class="card-value">0</div>
+          </div>
+        </div>
+
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon amber">
+            <i data-lucide="percent"></i>
+          </div>
+          <div class="card-details">
+            <h3>Rata-rata Kekosongan Jaringan</h3>
+            <div id="stat-stockout-avgrate" class="card-value">0%</div>
+          </div>
+        </div>
+
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon success">
+            <i data-lucide="store"></i>
+          </div>
+          <div class="card-details">
+            <h3>Cabang Paling Bermasalah</h3>
+            <div id="stat-stockout-worstoutlet" class="card-value" style="font-size: 16px;">-</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Filter & Action Bar for Stockout History -->
+      <section class="glass-panel filter-bar">
+        <div class="filter-group">
+          <label for="stockout-days-filter"><i data-lucide="calendar-range" style="width: 16px; height: 16px; display: inline;"></i> Periode:</label>
+          <select id="stockout-days-filter">
+            <option value="7">7 Hari Terakhir</option>
+            <option value="14">14 Hari Terakhir</option>
+            <option value="30" selected>30 Hari Terakhir</option>
+            <option value="60">60 Hari Terakhir</option>
+            <option value="90">90 Hari Terakhir</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <label for="stockout-status-filter"><i data-lucide="filter" style="width: 16px; height: 16px; display: inline;"></i> Status:</label>
+          <select id="stockout-status-filter">
+            <option value="ALL">-- Semua Status --</option>
+            <option value="CHRONIC">🔴 Kronis (Laku tapi Sering Kosong)</option>
+            <option value="WATCH">🟡 Waspada</option>
+            <option value="SAFE">🟢 Aman</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <label for="stockout-merk-filter"><i data-lucide="layers" style="width: 16px; height: 16px; display: inline;"></i> Merk:</label>
+          <select id="stockout-merk-filter">
+            <option value="ALL">-- Semua Merk --</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <div class="search-wrapper">
+            <i data-lucide="search"></i>
+            <input type="text" id="stockout-search-input" placeholder="Cari nama barang atau kode item...">
+          </div>
+        </div>
+
+        <div class="filter-group" style="margin-left: auto;">
+          <button id="btn-export-stockout" class="btn btn-success">
+            <i data-lucide="file-spreadsheet"></i> Ekspor Riwayat (XLSX)
+          </button>
+        </div>
+      </section>
+
+      <!-- Stockout History Table -->
+      <section class="table-section">
+        <div class="data-table-container">
+          <table class="analytics-table" id="stockout-table">
+            <thead>
+              <tr>
+                <th style="width: 50px; text-align: center;">No</th>
+                <th>Kode</th>
+                <th>Nama Barang</th>
+                <th>Merk</th>
+                <th style="text-align: right;">Total Terjual</th>
+                <th style="text-align: right;">Penjualan/Hari (ADS)</th>
+                <th style="text-align: right;">Rata² Kekosongan</th>
+                <th>Cabang Terparah</th>
+                <th style="text-align: center;">Status</th>
+                <th>Rincian Cabang Sering Kosong</th>
+              </tr>
+            </thead>
+            <tbody id="stockout-table-body">
+              <tr>
+                <td colspan="10" style="text-align: center; padding: 40px; color: var(--text-muted);">
+                  Memuat riwayat stockout...
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- TAB 6: ANALISA ABC & AGING STOK                               -->
+    <!-- ============================================================ -->
+    <div id="tab-panel-abc-aging" class="tab-panel">
+
+      <section class="dashboard-grid">
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon danger">
+            <i data-lucide="banknote"></i>
+          </div>
+          <div class="card-details">
+            <h3>Modal Tertahan (Dead Stock)</h3>
+            <div id="stat-abc-deadvalue" class="card-value">Rp 0</div>
+          </div>
+        </div>
+
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon success">
+            <i data-lucide="star"></i>
+          </div>
+          <div class="card-details">
+            <h3>Item Kategori A</h3>
+            <div id="stat-abc-classa" class="card-value">0</div>
+          </div>
+        </div>
+
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon purple">
+            <i data-lucide="package-x"></i>
+          </div>
+          <div class="card-details">
+            <h3>Item Dead Stock</h3>
+            <div id="stat-abc-deadcount" class="card-value">0</div>
+          </div>
+        </div>
+
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon amber">
+            <i data-lucide="package-search"></i>
+          </div>
+          <div class="card-details">
+            <h3>Tidak Pernah Terjual</h3>
+            <div id="stat-abc-neversold" class="card-value">0</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="glass-panel filter-bar">
+        <div class="filter-group">
+          <label for="abc-days-filter"><i data-lucide="calendar-range" style="width: 16px; height: 16px; display: inline;"></i> Periode Omzet:</label>
+          <select id="abc-days-filter">
+            <option value="30">30 Hari</option>
+            <option value="60">60 Hari</option>
+            <option value="90" selected>90 Hari</option>
+            <option value="180">180 Hari</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <label for="abc-class-filter"><i data-lucide="filter" style="width: 16px; height: 16px; display: inline;"></i> Kelas ABC:</label>
+          <select id="abc-class-filter">
+            <option value="ALL">-- Semua Kelas --</option>
+            <option value="A">A (Kontributor Utama)</option>
+            <option value="B">B (Menengah)</option>
+            <option value="C">C (Kontribusi Kecil)</option>
+            <option value="-">Tanpa Penjualan</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <label for="abc-aging-filter"><i data-lucide="clock" style="width: 16px; height: 16px; display: inline;"></i> Umur Stok:</label>
+          <select id="abc-aging-filter">
+            <option value="ALL">-- Semua --</option>
+            <option value="FRESH">🟢 Segar (&le; 30 Hari)</option>
+            <option value="AGING_30_60">🟡 31-60 Hari</option>
+            <option value="AGING_60_90">🟠 61-90 Hari</option>
+            <option value="DEAD_STOCK">🔴 Dead Stock (&gt; 90 Hari)</option>
+            <option value="NEVER_SOLD">⚪ Tidak Pernah Terjual</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <div class="search-wrapper">
+            <i data-lucide="search"></i>
+            <input type="text" id="abc-search-input" placeholder="Cari nama barang atau kode item...">
+          </div>
+        </div>
+
+        <div class="filter-group" style="margin-left: auto;">
+          <button id="btn-export-abc" class="btn btn-success">
+            <i data-lucide="file-spreadsheet"></i> Ekspor (XLSX)
+          </button>
+        </div>
+      </section>
+
+      <section class="table-section">
+        <div class="data-table-container">
+          <table class="analytics-table" id="abc-table">
+            <thead>
+              <tr>
+                <th style="width: 50px; text-align: center;">No</th>
+                <th>Kode</th>
+                <th>Nama Barang</th>
+                <th>Merk</th>
+                <th style="text-align: right;">Stok Saat Ini</th>
+                <th style="text-align: center;">Kelas ABC</th>
+                <th style="text-align: right;">Kontribusi Omzet</th>
+                <th>Terakhir Terjual</th>
+                <th style="text-align: right;">Umur Stok</th>
+                <th style="text-align: right;">Est. Nilai Tertahan</th>
+              </tr>
+            </thead>
+            <tbody id="abc-table-body">
+              <tr>
+                <td colspan="10" style="text-align: center; padding: 40px; color: var(--text-muted);">
+                  Memuat analisa ABC & aging stok...
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- TAB 7: PERBANDINGAN PERFORMA ANTAR-CABANG                     -->
+    <!-- ============================================================ -->
+    <div id="tab-panel-outlet-performance" class="tab-panel">
+
+      <section class="dashboard-grid">
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon success">
+            <i data-lucide="trophy"></i>
+          </div>
+          <div class="card-details">
+            <h3>Cabang Teraktif</h3>
+            <div id="stat-outlet-top" class="card-value" style="font-size: 16px;">-</div>
+          </div>
+        </div>
+
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon danger">
+            <i data-lucide="alert-triangle"></i>
+          </div>
+          <div class="card-details">
+            <h3>Cabang Perlu Perhatian</h3>
+            <div id="stat-outlet-attention" class="card-value">0</div>
+          </div>
+        </div>
+
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon cyan">
+            <i data-lucide="banknote"></i>
+          </div>
+          <div class="card-details">
+            <h3>Total Omzet Jaringan</h3>
+            <div id="stat-outlet-revenue" class="card-value">Rp 0</div>
+          </div>
+        </div>
+
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon amber">
+            <i data-lucide="percent"></i>
+          </div>
+          <div class="card-details">
+            <h3>Rata-rata Kekosongan/Cabang</h3>
+            <div id="stat-outlet-avgstockout" class="card-value">0%</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="glass-panel filter-bar">
+        <div class="filter-group">
+          <label for="outlet-days-filter"><i data-lucide="calendar-range" style="width: 16px; height: 16px; display: inline;"></i> Periode:</label>
+          <select id="outlet-days-filter">
+            <option value="7">7 Hari</option>
+            <option value="14">14 Hari</option>
+            <option value="30" selected>30 Hari</option>
+            <option value="60">60 Hari</option>
+            <option value="90">90 Hari</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <label for="outlet-status-filter"><i data-lucide="filter" style="width: 16px; height: 16px; display: inline;"></i> Status:</label>
+          <select id="outlet-status-filter">
+            <option value="ALL">-- Semua Cabang --</option>
+            <option value="ATTENTION">🔴 Perlu Perhatian</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <div class="search-wrapper">
+            <i data-lucide="search"></i>
+            <input type="text" id="outlet-search-input" placeholder="Cari nama cabang...">
+          </div>
+        </div>
+
+        <div class="filter-group" style="margin-left: auto;">
+          <button id="btn-export-outlet" class="btn btn-success">
+            <i data-lucide="file-spreadsheet"></i> Ekspor (XLSX)
+          </button>
+        </div>
+      </section>
+
+      <section class="table-section">
+        <div class="data-table-container">
+          <table class="analytics-table" id="outlet-table">
+            <thead>
+              <tr>
+                <th style="width: 50px; text-align: center;">Rank</th>
+                <th>Cabang</th>
+                <th style="text-align: right;">Omzet</th>
+                <th style="text-align: right;">Profit</th>
+                <th style="text-align: right;">Qty Terjual</th>
+                <th style="text-align: right;">Transaksi</th>
+                <th style="text-align: right;">Stok Saat Ini</th>
+                <th style="text-align: right;">Kontribusi Omzet</th>
+                <th style="text-align: right;">Tingkat Kekosongan</th>
+                <th style="text-align: center;">Status</th>
+              </tr>
+            </thead>
+            <tbody id="outlet-table-body">
+              <tr>
+                <td colspan="10" style="text-align: center; padding: 40px; color: var(--text-muted);">
+                  Memuat performa cabang...
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- TAB 8: TRACKING SUPPLIER / VENDOR                             -->
+    <!-- ============================================================ -->
+    <div id="tab-panel-vendor-analysis" class="tab-panel">
+
+      <section class="dashboard-grid">
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon cyan">
+            <i data-lucide="truck"></i>
+          </div>
+          <div class="card-details">
+            <h3>Vendor Aktif</h3>
+            <div id="stat-vendor-count" class="card-value">0</div>
+          </div>
+        </div>
+
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon success">
+            <i data-lucide="banknote"></i>
+          </div>
+          <div class="card-details">
+            <h3>Total Belanja Periode</h3>
+            <div id="stat-vendor-spend" class="card-value">Rp 0</div>
+          </div>
+        </div>
+
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon purple">
+            <i data-lucide="crown"></i>
+          </div>
+          <div class="card-details">
+            <h3>Vendor Terbesar</h3>
+            <div id="stat-vendor-biggest" class="card-value" style="font-size: 16px;">-</div>
+          </div>
+        </div>
+
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon amber">
+            <i data-lucide="alert-circle"></i>
+          </div>
+          <div class="card-details">
+            <h3>Item Selisih Harga Signifikan</h3>
+            <div id="stat-vendor-pricegap" class="card-value">0</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="glass-panel filter-bar">
+        <div class="filter-group">
+          <label for="vendor-days-filter"><i data-lucide="calendar-range" style="width: 16px; height: 16px; display: inline;"></i> Periode:</label>
+          <select id="vendor-days-filter">
+            <option value="30">30 Hari</option>
+            <option value="60">60 Hari</option>
+            <option value="90" selected>90 Hari</option>
+            <option value="180">180 Hari</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <div class="search-wrapper">
+            <i data-lucide="search"></i>
+            <input type="text" id="vendor-search-input" placeholder="Cari nama vendor...">
+          </div>
+        </div>
+
+        <div class="filter-group" style="margin-left: auto;">
+          <button id="btn-export-vendor" class="btn btn-success">
+            <i data-lucide="file-spreadsheet"></i> Ekspor (XLSX)
+          </button>
+        </div>
+      </section>
+
+      <section class="table-section">
+        <div class="card-title" style="margin-bottom: 10px;">
+          <span><i data-lucide="truck" style="width: 15px; height: 15px; display: inline; vertical-align: middle;"></i> Rekap Belanja per Vendor</span>
+        </div>
+        <div class="data-table-container">
+          <table class="analytics-table" id="vendor-table">
+            <thead>
+              <tr>
+                <th style="width: 50px; text-align: center;">No</th>
+                <th>Vendor</th>
+                <th style="text-align: right;">Item Disuplai</th>
+                <th style="text-align: right;">Total Qty Dibeli</th>
+                <th style="text-align: right;">Total Belanja</th>
+                <th style="text-align: right;">Jumlah Invoice</th>
+                <th>Terakhir Beli</th>
+                <th style="text-align: right;">Item Termurah</th>
+              </tr>
+            </thead>
+            <tbody id="vendor-table-body">
+              <tr>
+                <td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);">
+                  Memuat rekap vendor...
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="table-section" style="margin-top: 20px;">
+        <div class="card-title" style="margin-bottom: 10px;">
+          <span><i data-lucide="alert-circle" style="width: 15px; height: 15px; display: inline; vertical-align: middle;"></i> Barang dengan Selisih Harga Vendor Signifikan (&ge; 10%)</span>
+        </div>
+        <div class="data-table-container">
+          <table class="analytics-table" id="vendor-pricegap-table">
+            <thead>
+              <tr>
+                <th>Kode</th>
+                <th>Nama Barang</th>
+                <th>Vendor Termurah</th>
+                <th style="text-align: right;">Harga Termurah</th>
+                <th>Vendor Termahal</th>
+                <th style="text-align: right;">Harga Termahal</th>
+                <th style="text-align: right;">Selisih</th>
+              </tr>
+            </thead>
+            <tbody id="vendor-pricegap-table-body">
+              <tr>
+                <td colspan="7" style="text-align: center; padding: 30px; color: var(--text-muted);">
+                  Tidak ada data.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- TAB 9: KELOLA DATABASE                                        -->
+    <!-- ============================================================ -->
+    <div id="tab-panel-database" class="tab-panel">
+      <section class="glass-panel" style="padding: 22px;">
+        <div class="card-title" style="margin-bottom: 18px;">
+          <span><i data-lucide="database" style="width: 16px; height: 16px; display: inline; vertical-align: middle;"></i> Manajemen Database</span>
+        </div>
+
+        <!-- Stats Cards Grid -->
+        <div class="sidebar-stats-grid" style="grid-template-columns: repeat(4, 1fr);">
+          <div class="sidebar-stat-card">
+            <span class="stat-label">Ukuran Database</span>
+            <span id="db-stat-size" class="stat-num">-</span>
+          </div>
+          <div class="sidebar-stat-card">
+            <span class="stat-label">Total Laporan Stok</span>
+            <span id="db-stat-reports" class="stat-num">-</span>
+          </div>
+          <div class="sidebar-stat-card">
+            <span class="stat-label">Total Baris Record</span>
+            <span id="db-stat-records" class="stat-num">-</span>
+          </div>
+          <div class="sidebar-stat-card">
+            <span class="stat-label">Rentang Tanggal</span>
+            <span id="db-stat-range" class="stat-num" style="font-size: 11.5px;">-</span>
+          </div>
+        </div>
+
+        <!-- Section: Cadangan & Pemeliharaan -->
+        <div class="sidebar-section-title" style="margin-top: 22px;">
+          <i data-lucide="hard-drive"></i>
+          <span>Cadangan & Pemeliharaan</span>
+        </div>
+        <div class="sidebar-actions-grid" style="grid-template-columns: repeat(3, 1fr); margin-top: 10px;">
+          <a id="btn-download-backup" href="/api/database/backup" class="btn btn-primary btn-sidebar-action" download>
+            <i data-lucide="download"></i> Unduh Cadangan (.db)
+          </a>
+
+          <label for="restore-file-input" class="btn btn-secondary btn-sidebar-action" style="margin: 0; cursor: pointer;">
+            <i data-lucide="upload"></i> Pulihkan (.db)
+            <input type="file" id="restore-file-input" accept=".db" style="display: none;">
+          </label>
+
+          <button id="btn-clear-db" class="btn btn-danger btn-sidebar-action">
+            <i data-lucide="trash-2"></i> Kosongkan Seluruh Database
+          </button>
+        </div>
+
+        <!-- Section: Daftar Riwayat Laporan -->
+        <div class="sidebar-section-title" style="margin-top: 24px;">
+          <i data-lucide="calendar"></i>
+          <span>Riwayat Laporan Stok Tersimpan</span>
+        </div>
+        <div class="sidebar-reports-list" id="db-reports-list" style="max-height: none; margin-top: 10px;">
+          <div style="text-align: center; color: var(--text-muted); padding: 30px 10px;">
+            Memuat riwayat...
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- TAB 10: IMPORT DATABASE                                        -->
+    <!-- ============================================================ -->
+    <div id="tab-panel-import" class="tab-panel">
+      <section class="glass-panel" style="padding: 22px;">
+        <div class="card-title" style="margin-bottom: 4px;">
+          <span><i data-lucide="upload-cloud" style="width: 16px; height: 16px; display: inline; vertical-align: middle;"></i> Import Database</span>
+        </div>
+        <div style="font-size: 12px; color: var(--text-secondary); line-height: 1.5; padding: 2px 2px 16px;">
+          Unggah berkas laporan dari Bee Accounting ke database SQLite. Seluruh data otomatis tersimpan ke riwayat dan langsung terhubung ke modul analisa.
+        </div>
+
+        <!-- 1. Smart Auto-Detect Upload Card -->
+        <div class="sidebar-section-title">
+          <i data-lucide="sparkles"></i>
+          <span>1. Deteksi Otomatis Cerdas (Rekomendasi)</span>
+        </div>
+        <div class="import-dropzone" id="dropzone-auto" style="padding: 20px 14px; margin-top: 10px;">
+          <i data-lucide="sparkles" style="color: var(--status-warning);"></i>
+          <h4>Seret Berkas Apa Saja ke Sini</h4>
+          <p>Stok, Penjualan, atau Pembelian otomatis terbaca oleh sistem</p>
+          <input type="file" id="input-file-auto" accept=".csv,.xls,.xlsx" style="display: none;">
+        </div>
+
+        <!-- 2. Specific Upload Cards -->
+        <div class="sidebar-section-title" style="margin-top: 20px;">
+          <i data-lucide="folder-up"></i>
+          <span>2. Unggah Spesifik Berdasarkan Jenis</span>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-top: 10px;">
+          <!-- Stock Dropzone Card -->
+          <div class="sidebar-stat-card" style="padding: 12px; display: flex; flex-direction: column; gap: 8px;">
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <strong style="font-size: 12.5px; color: var(--accent-cyan); display: flex; align-items: center; gap: 6px;">
+                <i data-lucide="layout-grid" style="width: 15px; height: 15px;"></i> Laporan Stok Harian
+              </strong>
+              <span style="font-size: 10.5px; color: var(--text-muted);">CSV / XLS</span>
+            </div>
+            <div class="import-dropzone" id="dropzone-stock" style="padding: 14px 10px; margin-top: 0;">
+              <h4 style="font-size: 12.5px;">Unggah Berkas Stok</h4>
+              <p style="font-size: 11px;">Klik atau seret berkas stok ke sini</p>
+              <input type="file" id="input-file-stock" accept=".csv,.xls,.xlsx" style="display: none;">
+            </div>
+          </div>
+
+          <!-- Sales Dropzone Card -->
+          <div class="sidebar-stat-card" style="padding: 12px; display: flex; flex-direction: column; gap: 8px;">
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <strong style="font-size: 12.5px; color: var(--accent-purple); display: flex; align-items: center; gap: 6px;">
+                <i data-lucide="trending-up" style="width: 15px; height: 15px;"></i> Laporan Penjualan Cabang
+              </strong>
+              <span style="font-size: 10.5px; color: var(--text-muted);">.xls / .xlsx</span>
+            </div>
+            <div class="import-dropzone" id="dropzone-sales" style="padding: 14px 10px; margin-top: 0;">
+              <h4 style="font-size: 12.5px;">Unggah Berkas Penjualan</h4>
+              <p style="font-size: 11px;">Contoh: 14-09-2026.xls</p>
+              <input type="file" id="input-file-sales" accept=".xls,.xlsx,.csv" style="display: none;">
+            </div>
+          </div>
+
+          <!-- Purchase Dropzone Card -->
+          <div class="sidebar-stat-card" style="padding: 12px; display: flex; flex-direction: column; gap: 8px;">
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <strong style="font-size: 12.5px; color: var(--status-success); display: flex; align-items: center; gap: 6px;">
+                <i data-lucide="shopping-bag" style="width: 15px; height: 15px;"></i> Laporan Pembelian Barang
+              </strong>
+              <span style="font-size: 10.5px; color: var(--text-muted);">.xls / .xlsx</span>
+            </div>
+            <div class="import-dropzone" id="dropzone-purchases" style="padding: 14px 10px; margin-top: 0;">
+              <h4 style="font-size: 12.5px;">Unggah Berkas Pembelian</h4>
+              <p style="font-size: 11px;">Contoh: DetailPembelian-*.xls</p>
+              <input type="file" id="input-file-purchases" accept=".xls,.xlsx,.csv" style="display: none;">
+            </div>
+          </div>
+        </div>
+
+        <!-- Section 3: Riwayat Batch Data -->
+        <div class="sidebar-section-title" style="margin-top: 22px;">
+          <i data-lucide="history"></i>
+          <span>3. Riwayat Batch Penjualan & Pembelian</span>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 10px;">
+          <div>
+            <span style="font-size: 11px; font-weight: 700; color: var(--accent-purple); text-transform: uppercase;">Batch Penjualan</span>
+            <div id="import-history-sales" style="margin-top: 6px; max-height: 260px; overflow-y: auto;">
+              <p style="color: var(--text-muted); font-size: 11.5px;">Memuat data...</p>
+            </div>
+          </div>
+
+          <div>
+            <span style="font-size: 11px; font-weight: 700; color: var(--status-success); text-transform: uppercase;">Batch Pembelian</span>
+            <div id="import-history-purchases" style="margin-top: 6px; max-height: 260px; overflow-y: auto;">
+              <p style="color: var(--text-muted); font-size: 11.5px;">Memuat data...</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
         <!-- Footer -->
         <footer>
           <p>&copy; 2026 Voucher Stock & Sales Analytics. Didukung oleh Google Antigravity IDE.</p>
@@ -555,180 +1229,6 @@
       </main>
     </div>
   </div>
-
-  <!-- Sidebar Drawer Manajemen Database -->
-  <div id="db-sidebar-overlay" class="sidebar-overlay" style="display: none;"></div>
-  <aside id="db-sidebar" class="sidebar-drawer">
-    <div class="sidebar-header">
-      <div class="sidebar-title">
-        <i data-lucide="database"></i>
-        <span>Manajemen Database</span>
-      </div>
-      <button id="btn-close-sidebar" class="btn-close" title="Tutup Sidebar">&times;</button>
-    </div>
-
-    <div class="sidebar-body">
-      <!-- Stats Cards Grid -->
-      <div class="sidebar-stats-grid">
-        <div class="sidebar-stat-card">
-          <span class="stat-label">Ukuran Database</span>
-          <span id="db-stat-size" class="stat-num">-</span>
-        </div>
-        <div class="sidebar-stat-card">
-          <span class="stat-label">Total Laporan Stok</span>
-          <span id="db-stat-reports" class="stat-num">-</span>
-        </div>
-        <div class="sidebar-stat-card">
-          <span class="stat-label">Total Baris Record</span>
-          <span id="db-stat-records" class="stat-num">-</span>
-        </div>
-        <div class="sidebar-stat-card">
-          <span class="stat-label">Rentang Tanggal</span>
-          <span id="db-stat-range" class="stat-num" style="font-size: 11.5px;">-</span>
-        </div>
-      </div>
-
-      <!-- Section: Cadangan & Pemeliharaan -->
-      <div class="sidebar-section-title" style="margin-top: 6px;">
-        <i data-lucide="hard-drive"></i>
-        <span>Cadangan & Pemeliharaan</span>
-      </div>
-      <div class="sidebar-actions-grid">
-        <button id="btn-sidebar-import" class="btn btn-secondary btn-sidebar-action" style="grid-column: span 2; background: rgba(6, 182, 212, 0.15); color: var(--accent-cyan); border: 1px solid rgba(6, 182, 212, 0.4); font-weight: 700;">
-          <i data-lucide="upload-cloud"></i> Buka Menu Import Database
-        </button>
-
-        <a id="btn-download-backup" href="/api/database/backup" class="btn btn-primary btn-sidebar-action" download>
-          <i data-lucide="download"></i> Unduh Cadangan (.db)
-        </a>
-
-        <label for="restore-file-input" class="btn btn-secondary btn-sidebar-action" style="margin: 0; cursor: pointer;">
-          <i data-lucide="upload"></i> Pulihkan (.db)
-          <input type="file" id="restore-file-input" accept=".db" style="display: none;">
-        </label>
-
-        <button id="btn-clear-db" class="btn btn-danger btn-sidebar-action" style="grid-column: span 2;">
-          <i data-lucide="trash-2"></i> Kosongkan Seluruh Database
-        </button>
-      </div>
-
-      <!-- Section: Daftar Riwayat Laporan -->
-      <div class="sidebar-section-title" style="margin-top: 14px;">
-        <i data-lucide="calendar"></i>
-        <span>Riwayat Laporan Stok Tersimpan</span>
-      </div>
-      <div class="sidebar-reports-list" id="db-reports-list">
-        <div style="text-align: center; color: var(--text-muted); padding: 30px 10px;">
-          Memuat riwayat...
-        </div>
-      </div>
-    </div>
-  </aside>
-
-  <!-- Sidebar Drawer Menu Import Database -->
-  <div id="import-sidebar-overlay" class="sidebar-overlay" style="display: none;"></div>
-  <aside id="import-sidebar" class="sidebar-drawer import-sidebar-drawer">
-    <div class="sidebar-header">
-      <div class="sidebar-title">
-        <i data-lucide="upload-cloud"></i>
-        <span>Menu Import Database</span>
-      </div>
-      <button id="btn-close-import-sidebar" class="btn-close" title="Tutup Sidebar">&times;</button>
-    </div>
-
-    <div class="sidebar-body">
-      <!-- Short Guide -->
-      <div style="font-size: 12px; color: var(--text-secondary); line-height: 1.5; padding: 2px 2px 8px; border-bottom: 1px solid var(--panel-border);">
-        Unggah berkas laporan dari Bee Accounting ke database SQLite. Seluruh data otomatis tersimpan ke riwayat dan langsung terhubung ke modul analisa.
-      </div>
-
-      <!-- 1. Smart Auto-Detect Upload Card -->
-      <div class="sidebar-section-title">
-        <i data-lucide="sparkles"></i>
-        <span>1. Deteksi Otomatis Cerdas (Rekomendasi)</span>
-      </div>
-      <div class="import-dropzone" id="dropzone-auto" style="padding: 20px 14px; margin-top: 0;">
-        <i data-lucide="sparkles" style="color: var(--status-warning);"></i>
-        <h4>Seret Berkas Apa Saja ke Sini</h4>
-        <p>Stok, Penjualan, atau Pembelian otomatis terbaca oleh sistem</p>
-        <input type="file" id="input-file-auto" accept=".csv,.xls,.xlsx" style="display: none;">
-      </div>
-
-      <!-- 2. Specific Upload Cards -->
-      <div class="sidebar-section-title" style="margin-top: 10px;">
-        <i data-lucide="folder-up"></i>
-        <span>2. Unggah Spesifik Berdasarkan Jenis</span>
-      </div>
-
-      <!-- Stock Dropzone Card -->
-      <div class="sidebar-stat-card" style="padding: 12px; display: flex; flex-direction: column; gap: 8px;">
-        <div style="display: flex; align-items: center; justify-content: space-between;">
-          <strong style="font-size: 12.5px; color: var(--accent-cyan); display: flex; align-items: center; gap: 6px;">
-            <i data-lucide="layout-grid" style="width: 15px; height: 15px;"></i> Laporan Stok Harian
-          </strong>
-          <span style="font-size: 10.5px; color: var(--text-muted);">CSV / XLS</span>
-        </div>
-        <div class="import-dropzone" id="dropzone-stock" style="padding: 14px 10px; margin-top: 0;">
-          <h4 style="font-size: 12.5px;">Unggah Berkas Stok</h4>
-          <p style="font-size: 11px;">Klik atau seret berkas stok ke sini</p>
-          <input type="file" id="input-file-stock" accept=".csv,.xls,.xlsx" style="display: none;">
-        </div>
-      </div>
-
-      <!-- Sales Dropzone Card -->
-      <div class="sidebar-stat-card" style="padding: 12px; display: flex; flex-direction: column; gap: 8px;">
-        <div style="display: flex; align-items: center; justify-content: space-between;">
-          <strong style="font-size: 12.5px; color: var(--accent-purple); display: flex; align-items: center; gap: 6px;">
-            <i data-lucide="trending-up" style="width: 15px; height: 15px;"></i> Laporan Penjualan Cabang
-          </strong>
-          <span style="font-size: 10.5px; color: var(--text-muted);">.xls / .xlsx</span>
-        </div>
-        <div class="import-dropzone" id="dropzone-sales" style="padding: 14px 10px; margin-top: 0;">
-          <h4 style="font-size: 12.5px;">Unggah Berkas Penjualan</h4>
-          <p style="font-size: 11px;">Contoh: 14-09-2026.xls</p>
-          <input type="file" id="input-file-sales" accept=".xls,.xlsx,.csv" style="display: none;">
-        </div>
-      </div>
-
-      <!-- Purchase Dropzone Card -->
-      <div class="sidebar-stat-card" style="padding: 12px; display: flex; flex-direction: column; gap: 8px;">
-        <div style="display: flex; align-items: center; justify-content: space-between;">
-          <strong style="font-size: 12.5px; color: var(--status-success); display: flex; align-items: center; gap: 6px;">
-            <i data-lucide="shopping-bag" style="width: 15px; height: 15px;"></i> Laporan Pembelian Barang
-          </strong>
-          <span style="font-size: 10.5px; color: var(--text-muted);">.xls / .xlsx</span>
-        </div>
-        <div class="import-dropzone" id="dropzone-purchases" style="padding: 14px 10px; margin-top: 0;">
-          <h4 style="font-size: 12.5px;">Unggah Berkas Pembelian</h4>
-          <p style="font-size: 11px;">Contoh: DetailPembelian-*.xls</p>
-          <input type="file" id="input-file-purchases" accept=".xls,.xlsx,.csv" style="display: none;">
-        </div>
-      </div>
-
-      <!-- Section 3: Riwayat Batch Data -->
-      <div class="sidebar-section-title" style="margin-top: 12px;">
-        <i data-lucide="history"></i>
-        <span>3. Riwayat Batch Penjualan & Pembelian</span>
-      </div>
-
-      <div style="display: flex; flex-direction: column; gap: 10px;">
-        <div>
-          <span style="font-size: 11px; font-weight: 700; color: var(--accent-purple); text-transform: uppercase;">Batch Penjualan</span>
-          <div id="import-history-sales" style="margin-top: 6px; max-height: 180px; overflow-y: auto;">
-            <p style="color: var(--text-muted); font-size: 11.5px;">Memuat data...</p>
-          </div>
-        </div>
-
-        <div>
-          <span style="font-size: 11px; font-weight: 700; color: var(--status-success); text-transform: uppercase;">Batch Pembelian</span>
-          <div id="import-history-purchases" style="margin-top: 6px; max-height: 180px; overflow-y: auto;">
-            <p style="color: var(--text-muted); font-size: 11.5px;">Memuat data...</p>
-          </div>
-        </div>
-      </div>
-
-    </div>
-  </aside>
 
   <!-- Load internal Javascript Modules -->
   <script src="data/stock-data.js?v=2.5"></script>
