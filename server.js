@@ -632,12 +632,33 @@ server.listen(PORT, HOST, () => {
   console.log(`🌐 URL Network: http://${HOST}:${PORT}`);
   console.log(`💾 Database:    ${db.dbPath}`);
   console.log(`====================================================`);
+
+  // In a container, a missing DB_PATH usually means the compose/ZimaOS volume
+  // mapping for /app/data didn't get applied — the DB would then be written
+  // inside the container's own writable layer instead of the mounted host
+  // folder, and get wiped the next time the container is recreated.
+  if (process.env.NODE_ENV === 'production' && !process.env.DB_PATH) {
+    console.warn(`⚠️  PERINGATAN: DB_PATH tidak diset padahal NODE_ENV=production.`);
+    console.warn(`   Database mungkin TIDAK tersimpan ke volume persisten dan`);
+    console.warn(`   bisa HILANG saat container di-restart/diperbarui.`);
+    console.warn(`   Periksa pemetaan volume "/app/data" di docker-compose.yml / ZimaOS.`);
+  }
 });
 
-process.on('SIGINT', () => {
-  console.log('\n[Shutdown] Menutup koneksi database dan server...');
+// SIGTERM is what `docker stop`, container restarts, and ZimaOS updates send
+// (not SIGINT) — without handling it, the process can be killed mid-write,
+// leaving the SQLite file corrupted or truncated. Handle both the same way.
+function gracefulShutdown(signal) {
+  console.log(`\n[Shutdown] Menerima ${signal}, menutup koneksi database dan server dengan aman...`);
+  db.backupDatabase();
   db.close();
   server.close(() => {
     process.exit(0);
   });
-});
+  // Force-exit if close() hangs (e.g. a lingering connection) so the
+  // container's stop grace period doesn't run out and escalate to SIGKILL.
+  setTimeout(() => process.exit(0), 5000).unref();
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));

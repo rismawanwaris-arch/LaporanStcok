@@ -13,6 +13,11 @@ yarn-error.log*
 *.db-shm
 *.db-wal
 
+# Automatic local database backups (rotated copies next to the live .db —
+# not meant to live in git; download a real backup via the app's "Unduh
+# Cadangan" button or copy data/stock_history.db somewhere safe instead)
+data/backups/
+
 # Operating System files
 Thumbs.db
 ehthumbs.db
