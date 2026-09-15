@@ -98,6 +98,10 @@
             <i data-lucide="truck"></i>
             <span class="nav-label">Supplier / Vendor</span>
           </button>
+          <button class="sidebar-nav-item tab-btn" data-tab="trend-analysis" title="Tren Penjualan & Pembelian">
+            <i data-lucide="trending-up"></i>
+            <span class="nav-label">Tren Periode</span>
+          </button>
         </nav>
       </div>
 
@@ -354,6 +358,16 @@
       <!-- Filter & Action Bar for Rebalancing -->
       <section class="glass-panel filter-bar">
         <div class="filter-group">
+          <label for="rebalance-days-filter"><i data-lucide="calendar-range" style="width: 16px; height: 16px; display: inline;"></i> Periode ADS:</label>
+          <select id="rebalance-days-filter">
+            <option value="1">1 Hari Terakhir</option>
+            <option value="7">7 Hari Terakhir</option>
+            <option value="14">14 Hari Terakhir</option>
+            <option value="30">30 Hari Terakhir</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
           <label for="rebalance-urgency-filter"><i data-lucide="filter" style="width: 16px; height: 16px; display: inline;"></i> Urgensi:</label>
           <select id="rebalance-urgency-filter">
             <option value="ALL">-- Semua Tingkat --</option>
@@ -418,6 +432,16 @@
       
       <!-- Filter & Action Bar for DoC -->
       <section class="glass-panel filter-bar">
+        <div class="filter-group">
+          <label for="coverage-days-filter"><i data-lucide="calendar-range" style="width: 16px; height: 16px; display: inline;"></i> Periode ADS:</label>
+          <select id="coverage-days-filter">
+            <option value="1">1 Hari Terakhir</option>
+            <option value="7">7 Hari Terakhir</option>
+            <option value="14">14 Hari Terakhir</option>
+            <option value="30">30 Hari Terakhir</option>
+          </select>
+        </div>
+
         <div class="filter-group">
           <label for="coverage-status-filter"><i data-lucide="filter" style="width: 16px; height: 16px; display: inline;"></i> Status Ketahanan:</label>
           <select id="coverage-status-filter">
@@ -522,6 +546,16 @@
 
       <!-- Filter & Action Bar for PO -->
       <section class="glass-panel filter-bar">
+        <div class="filter-group">
+          <label for="po-days-filter"><i data-lucide="calendar-range" style="width: 16px; height: 16px; display: inline;"></i> Periode ADS:</label>
+          <select id="po-days-filter">
+            <option value="1">1 Hari Terakhir</option>
+            <option value="7">7 Hari Terakhir</option>
+            <option value="14">14 Hari Terakhir</option>
+            <option value="30">30 Hari Terakhir</option>
+          </select>
+        </div>
+
         <div class="filter-group">
           <label for="po-merk-filter"><i data-lucide="layers" style="width: 16px; height: 16px; display: inline;"></i> Merk:</label>
           <select id="po-merk-filter">
@@ -1060,7 +1094,111 @@
     </div>
 
     <!-- ============================================================ -->
-    <!-- TAB 9: KELOLA DATABASE                                        -->
+    <!-- TAB 9: TREN PENJUALAN & PEMBELIAN PER PERIODE                 -->
+    <!-- ============================================================ -->
+    <div id="tab-panel-trend-analysis" class="tab-panel">
+
+      <section class="dashboard-grid">
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon success">
+            <i data-lucide="banknote"></i>
+          </div>
+          <div class="card-details">
+            <h3>Total Omzet (Seluruh Riwayat)</h3>
+            <div id="stat-trend-revenue" class="card-value">Rp 0</div>
+          </div>
+        </div>
+
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon cyan">
+            <i data-lucide="trending-up"></i>
+          </div>
+          <div class="card-details">
+            <h3>Total Profit</h3>
+            <div id="stat-trend-profit" class="card-value">Rp 0</div>
+          </div>
+        </div>
+
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon purple">
+            <i data-lucide="shopping-bag"></i>
+          </div>
+          <div class="card-details">
+            <h3>Total Pembelian</h3>
+            <div id="stat-trend-purchase" class="card-value">Rp 0</div>
+          </div>
+        </div>
+
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon amber">
+            <i data-lucide="calendar-days"></i>
+          </div>
+          <div class="card-details">
+            <h3>Jumlah Periode Terekam</h3>
+            <div id="stat-trend-buckets" class="card-value">0</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="glass-panel filter-bar">
+        <div class="filter-group">
+          <label for="trend-bucket-filter"><i data-lucide="calendar-range" style="width: 16px; height: 16px; display: inline;"></i> Kelompokkan Per:</label>
+          <select id="trend-bucket-filter">
+            <option value="day">Harian</option>
+            <option value="3day">3 Harian</option>
+            <option value="week" selected>Mingguan</option>
+            <option value="2week">2 Mingguan</option>
+            <option value="month">Bulanan (Kalender)</option>
+          </select>
+        </div>
+
+        <div class="filter-group" style="margin-left: auto;">
+          <button id="btn-export-trend" class="btn btn-success">
+            <i data-lucide="file-spreadsheet"></i> Ekspor (XLSX)
+          </button>
+        </div>
+      </section>
+
+      <section class="vis-section" style="grid-template-columns: 1fr;">
+        <div class="glass-panel chart-card">
+          <div class="card-title">
+            <span>Tren Omzet, Profit & Pembelian</span>
+            <i data-lucide="line-chart"></i>
+          </div>
+          <div class="chart-container">
+            <canvas id="trendChart"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <section class="table-section">
+        <div class="data-table-container">
+          <table class="analytics-table" id="trend-table">
+            <thead>
+              <tr>
+                <th>Periode</th>
+                <th style="text-align: right;">Hari Tercatat</th>
+                <th style="text-align: right;">Omzet Penjualan</th>
+                <th style="text-align: right;">Qty Terjual</th>
+                <th style="text-align: right;">Profit</th>
+                <th style="text-align: right;">Total Pembelian</th>
+                <th style="text-align: right;">Qty Dibeli</th>
+              </tr>
+            </thead>
+            <tbody id="trend-table-body">
+              <tr>
+                <td colspan="7" style="text-align: center; padding: 40px; color: var(--text-muted);">
+                  Memuat tren periode...
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- TAB 10: KELOLA DATABASE                                       -->
     <!-- ============================================================ -->
     <div id="tab-panel-database" class="tab-panel">
       <section class="glass-panel" style="padding: 22px;">
@@ -1131,7 +1269,7 @@
     </div>
 
     <!-- ============================================================ -->
-    <!-- TAB 10: IMPORT DATABASE                                        -->
+    <!-- TAB 11: IMPORT DATABASE                                        -->
     <!-- ============================================================ -->
     <div id="tab-panel-import" class="tab-panel">
       <section class="glass-panel" style="padding: 22px;">
@@ -1140,6 +1278,21 @@
         </div>
         <div style="font-size: 12px; color: var(--text-secondary); line-height: 1.5; padding: 2px 2px 16px;">
           Unggah berkas laporan dari Bee Accounting ke database SQLite. Seluruh data otomatis tersimpan ke riwayat dan langsung terhubung ke modul analisa.
+        </div>
+
+        <!-- 0. Manual Date Override -->
+        <div class="sidebar-stat-card" style="padding: 12px 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 16px;">
+          <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 220px;">
+            <i data-lucide="calendar-cog" style="width: 16px; height: 16px; color: var(--accent-cyan);"></i>
+            <div>
+              <label for="import-custom-date" style="font-size: 12.5px; font-weight: 700; color: var(--text-primary); display: block;">Tanggal Manual (Opsional)</label>
+              <span style="font-size: 11px; color: var(--text-muted);">Kosongkan untuk deteksi tanggal otomatis dari isi berkas. Isi kalau mau timpa tanggalnya sendiri (mis. upload data susulan / backfill).</span>
+            </div>
+          </div>
+          <input type="date" id="import-custom-date" style="padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid var(--panel-border); background: var(--input-bg); color: var(--text-primary); font-family: inherit; font-size: 13px;">
+          <button id="btn-clear-import-date" type="button" class="btn btn-secondary" style="padding: 8px 12px; font-size: 12px;" title="Hapus tanggal manual">
+            <i data-lucide="x" style="width: 13px; height: 13px;"></i>
+          </button>
         </div>
 
         <!-- 1. Smart Auto-Detect Upload Card -->

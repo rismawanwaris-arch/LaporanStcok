@@ -82,6 +82,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupABCControls();
     setupOutletPerformanceControls();
     setupVendorAnalysisControls();
+    setupTrendAnalysisControls();
     setupImportCenter();
     
     // Check backend API and database first, fallback to static CSV
@@ -296,6 +297,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // merks when "ALL" is selected). Shared by renderTable() and renderCharts()
   // so the merge + outlet sort only run once per render instead of twice.
   function getActiveMerkData() {
+    if (!appState.parsedData) return null; // merk-selector can fire (e.g. browser form-state restore on reload) before initial data has loaded
     if (appState.activeMerk === 'ALL') {
       const merkData = {
         name: 'SEMUA MERK',
@@ -1122,6 +1124,7 @@ document.addEventListener('DOMContentLoaded', () => {
       'abc-aging': 'ABC & Aging Stok',
       'outlet-performance': 'Performa Cabang',
       'vendor-analysis': 'Supplier / Vendor',
+      'trend-analysis': 'Tren Periode',
       'database': 'Kelola Database',
       'import': 'Import Database'
     };
@@ -1166,6 +1169,8 @@ document.addEventListener('DOMContentLoaded', () => {
           loadOutletPerformanceData();
         } else if (targetTab === 'vendor-analysis') {
           loadVendorAnalysisData();
+        } else if (targetTab === 'trend-analysis') {
+          loadTrendAnalysisData();
         } else if (targetTab === 'database') {
           loadDatabaseInfo();
         } else if (targetTab === 'import') {
@@ -1256,7 +1261,8 @@ document.addEventListener('DOMContentLoaded', () => {
       tableBody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);"><i data-lucide="loader-2" class="spin"></i> Memuat rekomendasi transfer antar-cabang...</td></tr>`;
       if (window.lucide) lucide.createIcons();
 
-      const url = `/api/analytics/rebalancing?stockDate=${encodeURIComponent(appState.currentDate || '')}`;
+      const days = document.getElementById('rebalance-days-filter')?.value || '1';
+      const url = `/api/analytics/rebalancing?stockDate=${encodeURIComponent(appState.currentDate || '')}&days=${encodeURIComponent(days)}`;
       const res = await fetch(url);
       const json = await res.json();
 
@@ -1364,11 +1370,13 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function setupRebalanceControls() {
+    const daysFilter = document.getElementById('rebalance-days-filter');
     const urgencyFilter = document.getElementById('rebalance-urgency-filter');
     const merkFilter = document.getElementById('rebalance-merk-filter');
     const searchInput = document.getElementById('rebalance-search-input');
     const btnExport = document.getElementById('btn-export-rebalance');
 
+    if (daysFilter) daysFilter.addEventListener('change', loadRebalanceData);
     if (urgencyFilter) urgencyFilter.addEventListener('change', renderRebalanceTable);
     if (merkFilter) merkFilter.addEventListener('change', renderRebalanceTable);
     if (searchInput) searchInput.addEventListener('input', renderRebalanceTable);
@@ -1414,7 +1422,8 @@ document.addEventListener('DOMContentLoaded', () => {
       tableBody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);"><i data-lucide="loader-2" class="spin"></i> Memuat analisa ketahanan stok...</td></tr>`;
       if (window.lucide) lucide.createIcons();
 
-      const url = `/api/analytics/integrated?stockDate=${encodeURIComponent(appState.currentDate || '')}`;
+      const days = document.getElementById('coverage-days-filter')?.value || '1';
+      const url = `/api/analytics/integrated?stockDate=${encodeURIComponent(appState.currentDate || '')}&days=${encodeURIComponent(days)}`;
       const res = await fetch(url);
       const json = await res.json();
 
@@ -1493,10 +1502,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function setupCoverageControls() {
+    const daysFilter = document.getElementById('coverage-days-filter');
     const statusFilter = document.getElementById('coverage-status-filter');
     const searchInput = document.getElementById('coverage-search-input');
     const btnExport = document.getElementById('btn-export-coverage');
 
+    if (daysFilter) daysFilter.addEventListener('change', loadCoverageData);
     if (statusFilter) statusFilter.addEventListener('change', renderCoverageTable);
     if (searchInput) searchInput.addEventListener('input', renderCoverageTable);
 
@@ -1539,7 +1550,8 @@ document.addEventListener('DOMContentLoaded', () => {
       tableBody.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 40px; color: var(--text-muted);"><i data-lucide="loader-2" class="spin"></i> Memuat rekomendasi PO belanja...</td></tr>`;
       if (window.lucide) lucide.createIcons();
 
-      const url = `/api/analytics/po?stockDate=${encodeURIComponent(appState.currentDate || '')}`;
+      const days = document.getElementById('po-days-filter')?.value || '1';
+      const url = `/api/analytics/po?stockDate=${encodeURIComponent(appState.currentDate || '')}&days=${encodeURIComponent(days)}`;
       const res = await fetch(url);
       const json = await res.json();
 
@@ -1629,9 +1641,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function setupPOControls() {
+    const daysFilter = document.getElementById('po-days-filter');
     const merkFilter = document.getElementById('po-merk-filter');
     const searchInput = document.getElementById('po-search-input');
     const btnExport = document.getElementById('btn-export-po');
+
+    if (daysFilter) daysFilter.addEventListener('change', loadPOData);
 
     if (merkFilter) merkFilter.addEventListener('change', renderPOTable);
     if (searchInput) searchInput.addEventListener('input', renderPOTable);
@@ -2224,13 +2239,225 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ============================================================
-  // TAB 9: MULTI-TYPE IMPORT CENTER
+  // TAB 9: TREN PENJUALAN & PEMBELIAN PER PERIODE
+  // Buckets the full sales/purchase history into fixed periods (daily, every
+  // 3 days, weekly, biweekly, or real calendar months) so patterns across the
+  // daily uploads become visible over time, not just a single-window average.
+  // ============================================================
+  let trendData = null;
+  let trendChartInstance = null;
+
+  const TREND_BUCKET_LABELS = {
+    day: 'Harian',
+    '3day': '3 Harian',
+    week: 'Mingguan',
+    '2week': '2 Mingguan',
+    month: 'Bulanan'
+  };
+
+  async function loadTrendAnalysisData() {
+    const tableBody = document.getElementById('trend-table-body');
+    if (!tableBody) return;
+
+    try {
+      tableBody.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 40px; color: var(--text-muted);"><i data-lucide="loader-2" class="spin"></i> Memuat tren periode...</td></tr>`;
+      if (window.lucide) lucide.createIcons();
+
+      const bucket = document.getElementById('trend-bucket-filter')?.value || 'week';
+      const res = await fetch(`/api/analytics/trend?bucket=${encodeURIComponent(bucket)}`);
+      const json = await res.json();
+
+      if (!json.success || !json.data) throw new Error(json.message || 'Gagal mengambil data tren');
+
+      trendData = json.data;
+      renderTrendChart();
+      renderTrendTable();
+    } catch (err) {
+      console.error('Trend analysis load error:', err);
+      tableBody.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 40px; color: var(--status-danger);">Gagal memuat tren periode: ${err.message}</td></tr>`;
+    }
+  }
+
+  function formatTrendBucketLabel(bucket, bucketType) {
+    if (bucketType === 'month') {
+      const [y, m] = bucket.label.split('-');
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+      return `${monthNames[parseInt(m, 10) - 1]} ${y}`;
+    }
+    if (bucket.startDate === bucket.endDate) return formatDateDisplay(bucket.startDate);
+    return `${formatDateDisplay(bucket.startDate)} - ${formatDateDisplay(bucket.endDate)}`;
+  }
+
+  function renderTrendChart() {
+    const canvas = document.getElementById('trendChart');
+    if (!canvas || !trendData) return;
+
+    const buckets = trendData.buckets || [];
+    const totalRevenue = buckets.reduce((s, b) => s + b.revenue, 0);
+    const totalProfit = buckets.reduce((s, b) => s + b.profit, 0);
+    const totalPurchase = buckets.reduce((s, b) => s + b.purchAmount, 0);
+
+    const statRevenue = document.getElementById('stat-trend-revenue');
+    const statProfit = document.getElementById('stat-trend-profit');
+    const statPurchase = document.getElementById('stat-trend-purchase');
+    const statBuckets = document.getElementById('stat-trend-buckets');
+    if (statRevenue) statRevenue.textContent = `Rp ${totalRevenue.toLocaleString('id-ID')}`;
+    if (statProfit) statProfit.textContent = `Rp ${totalProfit.toLocaleString('id-ID')}`;
+    if (statPurchase) statPurchase.textContent = `Rp ${totalPurchase.toLocaleString('id-ID')}`;
+    if (statBuckets) statBuckets.textContent = buckets.length;
+
+    if (trendChartInstance) trendChartInstance.destroy();
+    if (buckets.length === 0) return;
+
+    const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+    const gridColor = isLight ? 'rgba(15, 23, 42, 0.05)' : 'rgba(255, 255, 255, 0.04)';
+    const tickColor = isLight ? '#475569' : '#9ca3af';
+    const tooltipBg = isLight ? 'rgba(255, 255, 255, 0.98)' : 'rgba(17, 25, 40, 0.95)';
+    const tooltipBorder = isLight ? 'rgba(15, 23, 42, 0.1)' : 'rgba(6, 182, 212, 0.2)';
+    const tooltipTextPrimary = isLight ? '#0f172a' : '#f3f4f6';
+    const tooltipTextSecondary = isLight ? '#475569' : '#9ca3af';
+
+    const ctx = canvas.getContext('2d');
+    trendChartInstance = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: buckets.map(b => formatTrendBucketLabel(b, trendData.bucketType)),
+        datasets: [
+          {
+            label: 'Omzet Penjualan',
+            data: buckets.map(b => b.revenue),
+            borderColor: '#06b6d4',
+            backgroundColor: 'rgba(6, 182, 212, 0.12)',
+            fill: true,
+            tension: 0.3
+          },
+          {
+            label: 'Profit',
+            data: buckets.map(b => b.profit),
+            borderColor: '#10b981',
+            backgroundColor: 'rgba(16, 185, 129, 0.08)',
+            fill: true,
+            tension: 0.3
+          },
+          {
+            label: 'Total Pembelian',
+            data: buckets.map(b => b.purchAmount),
+            borderColor: '#a855f7',
+            backgroundColor: 'rgba(168, 85, 247, 0.08)',
+            fill: true,
+            tension: 0.3
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { labels: { color: tickColor } },
+          tooltip: {
+            backgroundColor: tooltipBg,
+            borderColor: tooltipBorder,
+            borderWidth: 1,
+            titleColor: tooltipTextPrimary,
+            bodyColor: tooltipTextSecondary,
+            callbacks: {
+              label: (item) => `${item.dataset.label}: Rp ${item.parsed.y.toLocaleString('id-ID')}`
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: { color: gridColor },
+            ticks: { color: tickColor, font: { size: 10 } }
+          },
+          y: {
+            grid: { color: gridColor },
+            ticks: {
+              color: tickColor,
+              callback: (val) => `${(val / 1000).toLocaleString('id-ID')}rb`
+            }
+          }
+        }
+      }
+    });
+  }
+
+  function renderTrendTable() {
+    const tableBody = document.getElementById('trend-table-body');
+    if (!tableBody || !trendData) return;
+
+    const buckets = trendData.buckets || [];
+    if (buckets.length === 0) {
+      tableBody.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 40px; color: var(--text-muted);">Belum ada data penjualan/pembelian untuk ditampilkan sebagai tren.</td></tr>`;
+      return;
+    }
+
+    // Most recent period first, easier to spot the latest trend at a glance
+    const rows = [...buckets].reverse();
+    let rowsHtml = '';
+    rows.forEach(b => {
+      rowsHtml += `
+        <tr>
+          <td style="font-weight: 700;">${escapeHtml(formatTrendBucketLabel(b, trendData.bucketType))}</td>
+          <td style="text-align: right; color: var(--text-muted);">${b.days}</td>
+          <td style="text-align: right; font-weight: 700; color: var(--status-success);">Rp ${b.revenue.toLocaleString('id-ID')}</td>
+          <td style="text-align: right;">${b.qty.toLocaleString('id-ID')}</td>
+          <td style="text-align: right; color: var(--accent-cyan);">Rp ${b.profit.toLocaleString('id-ID')}</td>
+          <td style="text-align: right; color: var(--accent-purple);">Rp ${b.purchAmount.toLocaleString('id-ID')}</td>
+          <td style="text-align: right;">${b.purchQty.toLocaleString('id-ID')}</td>
+        </tr>
+      `;
+    });
+
+    tableBody.innerHTML = rowsHtml;
+  }
+
+  function setupTrendAnalysisControls() {
+    const bucketFilter = document.getElementById('trend-bucket-filter');
+    const btnExport = document.getElementById('btn-export-trend');
+
+    if (bucketFilter) bucketFilter.addEventListener('change', loadTrendAnalysisData);
+
+    if (btnExport) {
+      btnExport.addEventListener('click', () => {
+        if (!trendData || !trendData.buckets || trendData.buckets.length === 0) {
+          alert('Tidak ada data tren untuk diekspor.');
+          return;
+        }
+        const dataToExport = trendData.buckets.map(b => ({
+          'Periode': formatTrendBucketLabel(b, trendData.bucketType),
+          'Hari Tercatat': b.days,
+          'Omzet Penjualan': b.revenue,
+          'Qty Terjual': b.qty,
+          'Profit': b.profit,
+          'Total Pembelian': b.purchAmount,
+          'Qty Dibeli': b.purchQty
+        }));
+        const ws = XLSX.utils.json_to_sheet(dataToExport);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Tren_Periode');
+        const filename = `Tren_${TREND_BUCKET_LABELS[trendData.bucketType] || trendData.bucketType}.xlsx`;
+        XLSX.writeFile(wb, filename);
+      });
+    }
+  }
+
+  // ============================================================
+  // TAB 10: MULTI-TYPE IMPORT CENTER
   // ============================================================
   function setupImportCenter() {
     setupSpecificDropzone('dropzone-stock', 'input-file-stock', '/api/upload', 'stok');
     setupSpecificDropzone('dropzone-sales', 'input-file-sales', '/api/upload-sales', 'penjualan');
     setupSpecificDropzone('dropzone-purchases', 'input-file-purchases', '/api/upload-purchases', 'pembelian');
     setupSpecificDropzone('dropzone-auto', 'input-file-auto', '/api/upload-auto', 'otomatis');
+
+    const btnClearImportDate = document.getElementById('btn-clear-import-date');
+    if (btnClearImportDate) {
+      btnClearImportDate.addEventListener('click', () => {
+        const dateInput = document.getElementById('import-custom-date');
+        if (dateInput) dateInput.value = '';
+      });
+    }
   }
 
   function setupSpecificDropzone(dropzoneId, inputId, endpoint, label) {
@@ -2266,7 +2493,13 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function uploadSpecificFile(file, endpoint, label) {
-    showStatus(`Mengunggah berkas ${label}: "${file.name}"...`, 'info');
+    const customDate = document.getElementById('import-custom-date')?.value || '';
+    showStatus(
+      customDate
+        ? `Mengunggah berkas ${label}: "${file.name}" untuk tanggal ${formatDateDisplay(customDate)}...`
+        : `Mengunggah berkas ${label}: "${file.name}"...`,
+      'info'
+    );
 
     const reader = new FileReader();
     const isBinaryExcel = file.name.endsWith('.xls') || file.name.endsWith('.xlsx');
@@ -2274,6 +2507,7 @@ document.addEventListener('DOMContentLoaded', () => {
     reader.onload = async (e) => {
       try {
         let payload = { filename: file.name };
+        if (customDate) payload.customDate = customDate;
 
         if (isBinaryExcel) {
           payload.fileBase64 = e.target.result;
