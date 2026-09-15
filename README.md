@@ -51,10 +51,10 @@ ZimaOS menjalankan aplikasi dalam bentuk Docker Container. Anda dapat mendeploy 
 4. Buka berkas [docker-compose.yml](file:///c:/Users/Komputer/Documents/Coding/LaporanStock/docker-compose.yml) dari proyek ini, salin seluruh isinya, lalu tempelkan (*paste*) ke dalam kotak input ZimaOS.
 5. Periksa pengaturan:
    - **Title**: Analisa Stok Voucher
-   - **Port**: `3000` (atau sesuaikan port host jika port 3000 sudah dipakai)
+   - **Port**: `3500` (Akses web via port 3500)
    - **Volume**: Pastikan path host volume mengarah ke penyimpanan ZimaOS Anda, misalnya `/DATA/AppData/laporan-stock/data` -> `/app/data`.
 6. Klik **Submit / Install**. ZimaOS akan otomatis membangun dan menjalankan kontainer.
-7. Ikon aplikasi akan muncul di dashboard ZimaOS Anda! Klik ikon tersebut untuk langsung membukanya.
+7. Ikon aplikasi akan muncul di dashboard ZimaOS Anda! Klik ikon tersebut untuk langsung membukanya di `http://<IP-ZIMAOS>:3500`.
 
 ---
 
@@ -62,15 +62,16 @@ ZimaOS menjalankan aplikasi dalam bentuk Docker Container. Anda dapat mendeploy 
 
 Jika Anda lebih menyukai baris perintah:
 
-1. Salin/unggah folder proyek `LaporanStock` ke server ZimaOS (misalnya di `/DATA/AppData/laporan-stock`).
-2. Buka terminal SSH ke ZimaOS:
+1. Clone repositori ke server ZimaOS:
    ```bash
-   cd /DATA/AppData/laporan-stock
+   cd /DATA/AppData
+   git clone https://github.com/rismawanwaris-arch/LaporanStcok.git laporan-stock
+   cd laporan-stock
    docker compose up -d --build
    ```
-3. Buka browser dan akses:
+2. Buka browser dan akses:
    ```
-   http://<IP-ZIMAOS-ANDA>:3000
+   http://<IP-ZIMAOS-ANDA>:3500
    ```
 
 ---
