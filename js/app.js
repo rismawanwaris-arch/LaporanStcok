@@ -315,12 +315,12 @@ document.addEventListener('DOMContentLoaded', () => {
     
     outlets.forEach(outlet => {
       headerHtml += `
-        <th data-outlet="${outlet}" style="cursor: grab; min-width: 42px; max-width: 55px; width: 48px; text-align: center;">
+        <th data-outlet="${escapeHtml(outlet)}" style="cursor: grab; min-width: 42px; max-width: 55px; width: 48px; text-align: center;">
           <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;">
             <div class="drag-handle" style="opacity: 0.4; padding: 1px;">
               <i data-lucide="grip-horizontal" style="width: 10px; height: 10px;"></i>
             </div>
-            <div style="font-size: 9px; font-weight: 700; text-align: center; line-height: 1.15; white-space: normal; word-break: break-word; max-width: 44px;">${outlet}</div>
+            <div style="font-size: 9px; font-weight: 700; text-align: center; line-height: 1.15; white-space: normal; word-break: break-word; max-width: 44px;">${escapeHtml(outlet)}</div>
           </div>
         </th>
       `;
@@ -357,10 +357,10 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       tbodyHtml += `
-        <tr data-item-code="${item.code}" data-item-name="${item.name.toLowerCase()}">
+        <tr data-item-code="${escapeHtml(item.code)}" data-item-name="${escapeHtml(item.name.toLowerCase())}">
           <td>
-            <div style="font-weight: 600; color: var(--text-primary); white-space: normal; min-width: 220px;">${item.name}</div>
-            <div style="font-size: 11px; color: var(--text-muted);">${item.code}</div>
+            <div style="font-weight: 600; color: var(--text-primary); white-space: normal; min-width: 220px;">${escapeHtml(item.name)}</div>
+            <div style="font-size: 11px; color: var(--text-muted);">${escapeHtml(item.code)}</div>
           </td>
           ${cellsHtml}
           <td class="outlet-total" style="font-weight: 700; color: var(--accent-cyan); text-align: center;">${itemTotal}</td>
@@ -918,7 +918,7 @@ document.addEventListener('DOMContentLoaded', () => {
                   <span class="badge-stock">${totalStockFmt}</span>
                 </div>
                 <div class="report-item-meta">
-                  <span>${d.filename || 'Laporan'}</span> &bull; <span>${d.total_merks || 0} merk / ${d.total_items || 0} item</span>
+                  <span>${escapeHtml(d.filename || 'Laporan')}</span> &bull; <span>${d.total_merks || 0} merk / ${d.total_items || 0} item</span>
                 </div>
                 <div class="report-item-actions">
                   <button class="btn-mini-primary" data-action="view" data-date="${d.report_date}">
@@ -1217,7 +1217,6 @@ document.addEventListener('DOMContentLoaded', () => {
         closeImportSidebar();
       }
     });
-  }
 
   // ============================================================
   // TAB 2: SMART REBALANCING (TRANSFER ANTAR-CABANG)

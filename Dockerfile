@@ -18,8 +18,6 @@ COPY data/ ./data/
 COPY js/ ./js/
 COPY css/ ./css/
 COPY index.html ./
-COPY 1308\ vcr.csv* ./
-COPY 14-09-2026.xls* ./
 COPY DetailPembelian-*.xls* ./
 
 # Buat direktori data untuk volume persisten database SQLite
