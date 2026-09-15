@@ -529,6 +529,18 @@ const server = http.createServer((req, res) => {
     }
   }
 
+  if (req.method === 'GET' && pathname === '/api/analytics/trend') {
+    try {
+      const allowedBuckets = ['day', '3day', 'week', '2week', 'month'];
+      let bucketType = parsedUrl.searchParams.get('bucket') || 'week';
+      if (!allowedBuckets.includes(bucketType)) bucketType = 'week';
+      const data = db.getTrendAnalysis(bucketType);
+      return sendJson(res, 200, { success: true, data });
+    } catch (err) {
+      return sendJson(res, 500, { success: false, message: err.message });
+    }
+  }
+
   // 6. Database Management APIs
   if (req.method === 'GET' && pathname === '/api/database/info') {
     try {

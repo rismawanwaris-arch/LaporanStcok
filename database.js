@@ -1007,6 +1007,104 @@ class StockDatabase {
     return { days, vendors, priceGapItems: priceGapItems.slice(0, 50) };
   }
 
+  /**
+   * Groups the full sales + purchase history into fixed-size day buckets
+   * (or real calendar months) so trends across the daily uploads become
+   * visible — e.g. "is this week's revenue up or down from last week".
+   *
+   * @param {string} [bucketType='week'] - 'day' | '3day' | 'week' | '2week' | 'month'
+   */
+  getTrendAnalysis(bucketType = 'week') {
+    const salesByDay = this.db.prepare(`
+      SELECT transaction_date as date, SUM(subtotal) as revenue, SUM(qty) as qty, SUM(profit_loss) as profit
+      FROM sales_records GROUP BY transaction_date
+    `).all();
+
+    const purchByDay = this.db.prepare(`
+      SELECT purchase_date as date, SUM(subtotal) as amount, SUM(qty) as qty
+      FROM purchase_records GROUP BY purchase_date
+    `).all();
+
+    const dayMap = {};
+    function ensureDay(date) {
+      if (!dayMap[date]) dayMap[date] = { revenue: 0, qty: 0, profit: 0, purchAmount: 0, purchQty: 0 };
+      return dayMap[date];
+    }
+    salesByDay.forEach(r => {
+      const d = ensureDay(r.date);
+      d.revenue += r.revenue || 0;
+      d.qty += r.qty || 0;
+      d.profit += r.profit || 0;
+    });
+    purchByDay.forEach(r => {
+      const d = ensureDay(r.date);
+      d.purchAmount += r.amount || 0;
+      d.purchQty += r.qty || 0;
+    });
+
+    const allDates = Object.keys(dayMap).sort();
+    if (allDates.length === 0) {
+      return { bucketType, buckets: [] };
+    }
+
+    function newBucket(startDate) {
+      return { startDate, endDate: startDate, days: 0, revenue: 0, qty: 0, profit: 0, purchAmount: 0, purchQty: 0 };
+    }
+    function addDayToBucket(bucket, date) {
+      const d = dayMap[date];
+      bucket.endDate = date;
+      bucket.days += 1;
+      bucket.revenue += d.revenue;
+      bucket.qty += d.qty;
+      bucket.profit += d.profit;
+      bucket.purchAmount += d.purchAmount;
+      bucket.purchQty += d.purchQty;
+    }
+
+    const buckets = [];
+    if (bucketType === 'month') {
+      const monthMap = {};
+      const monthOrder = [];
+      allDates.forEach(date => {
+        const monthKey = date.slice(0, 7); // YYYY-MM
+        if (!monthMap[monthKey]) {
+          monthMap[monthKey] = newBucket(date);
+          monthMap[monthKey].label = monthKey;
+          monthOrder.push(monthKey);
+        }
+        addDayToBucket(monthMap[monthKey], date);
+      });
+      monthOrder.forEach(k => buckets.push(monthMap[k]));
+    } else {
+      const bucketSizeDays = { day: 1, '3day': 3, week: 7, '2week': 14 }[bucketType] || 7;
+      const firstDateMs = new Date(allDates[0] + 'T00:00:00Z').getTime();
+      const bucketByIndex = {};
+      const indexOrder = [];
+      allDates.forEach(date => {
+        const daysSinceStart = Math.floor((new Date(date + 'T00:00:00Z').getTime() - firstDateMs) / 86400000);
+        const idx = Math.floor(daysSinceStart / bucketSizeDays);
+        if (!bucketByIndex[idx]) {
+          bucketByIndex[idx] = newBucket(date);
+          indexOrder.push(idx);
+        }
+        addDayToBucket(bucketByIndex[idx], date);
+      });
+      indexOrder.sort((a, b) => a - b).forEach(idx => {
+        const b = bucketByIndex[idx];
+        b.label = b.startDate === b.endDate ? b.startDate : `${b.startDate} s/d ${b.endDate}`;
+        buckets.push(b);
+      });
+    }
+
+    buckets.forEach(b => {
+      b.revenue = Math.round(b.revenue);
+      b.profit = Math.round(b.profit);
+      b.purchAmount = Math.round(b.purchAmount);
+    });
+
+    return { bucketType, dateRange: { first: allDates[0], last: allDates[allDates.length - 1] }, buckets };
+  }
+
   // ==========================================
   // SYSTEM & MAINTENANCE
   // ==========================================
