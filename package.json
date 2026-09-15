@@ -1,0 +1,25 @@
+{
+  "name": "laporan-stock-analyzer",
+  "version": "2.0.0",
+  "description": "Aplikasi Analisa Stok Voucher & Database Riwayat Harian dengan Dukungan ZimaOS",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node scratch/test-parser.js"
+  },
+  "keywords": [
+    "stock-analysis",
+    "voucher",
+    "zimaos",
+    "casaos",
+    "sqlite"
+  ],
+  "author": "Antigravity",
+  "license": "ISC",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "xlsx": "^0.18.5"
+  }
+}

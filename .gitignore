@@ -1,0 +1,20 @@
+# Node dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Temporary files & logs
+*.log
+*.tmp
+
+# SQLite journal & lock files
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Operating System files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store

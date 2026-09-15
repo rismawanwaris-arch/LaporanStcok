@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voucher Analytics & Smart Rebalancing - Bee Accounting</title>
+  
+  <!-- Font & Styling -->
+  <link rel="stylesheet" href="css/style.css?v=2.5">
+  
+  <!-- Lucide Icons (CDN) -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <!-- Chart.js (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  
+  <!-- SortableJS (CDN) for smooth drag-and-drop table headers -->
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+  
+  <!-- SheetJS (CDN) for exporting tables directly to Excel .xlsx -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <!-- Global Utility Helper -->
+  <script>
+    function escapeHtml(str) {
+      if (str == null) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+    window.escapeHtml = escapeHtml;
+  </script>
+</head>
+<body>
+
+  <div class="app-layout">
+    
+    <!-- Left Navigation Sidebar -->
+    <aside class="app-sidebar" id="app-sidebar">
+      <!-- Sidebar Brand -->
+      <div class="sidebar-brand">
+        <div class="brand-icon-box">
+          <i data-lucide="bar-chart-3"></i>
+        </div>
+        <div class="brand-text">
+          <h2 class="brand-title">VOUCHER STOCK</h2>
+          <span class="brand-sub">Bee Accounting</span>
+        </div>
+      </div>
+
+      <!-- Navigation Section: Modul Analisa -->
+      <div class="sidebar-nav-group">
+        <div class="sidebar-group-title">MODUL ANALISA</div>
+        <nav class="sidebar-menu">
+          <button class="sidebar-nav-item tab-btn active" data-tab="stock-matrix" title="Matriks Stok Cabang">
+            <i data-lucide="layout-grid"></i>
+            <span class="nav-label">Matriks Stok Cabang</span>
+          </button>
+          <button class="sidebar-nav-item tab-btn" data-tab="rebalance" title="Saran Transfer Cabang">
+            <i data-lucide="arrow-left-right"></i>
+            <span class="nav-label">Saran Transfer Cabang</span>
+            <span class="tab-badge" id="badge-transfer-count">0</span>
+          </button>
+          <button class="sidebar-nav-item tab-btn" data-tab="coverage" title="Ketahanan Stok (DoC)">
+            <i data-lucide="clock"></i>
+            <span class="nav-label">Ketahanan Stok (DoC)</span>
+          </button>
+          <button class="sidebar-nav-item tab-btn" data-tab="po-planner" title="Rencana Belanja (PO)">
+            <i data-lucide="shopping-cart"></i>
+            <span class="nav-label">Rencana Belanja (PO)</span>
+            <span class="tab-badge" id="badge-po-count">0</span>
+          </button>
+        </nav>
+      </div>
+
+      <!-- Navigation Section: Data & Berkas -->
+      <div class="sidebar-nav-group">
+        <div class="sidebar-group-title">DATA & DATABASE</div>
+        <nav class="sidebar-menu">
+          <button id="btn-db-manage" class="sidebar-nav-item" title="Kelola Database Riwayat">
+            <i data-lucide="database"></i>
+            <span class="nav-label">Kelola Database</span>
+          </button>
+          <button id="btn-header-import" class="sidebar-nav-item" title="Buka Menu Import Database">
+            <i data-lucide="upload-cloud"></i>
+            <span class="nav-label">Import Database</span>
+          </button>
+        </nav>
+      </div>
+
+      <!-- Sidebar Footer: Theme & Collapse Toggle -->
+      <div class="sidebar-footer">
+        <button id="btn-theme-toggle" class="sidebar-nav-item theme-toggle-btn" title="Ubah Tema (Terang/Gelap)">
+          <i data-lucide="sun" id="theme-icon-light" style="display: none;"></i>
+          <i data-lucide="moon" id="theme-icon-dark"></i>
+          <span class="nav-label" id="theme-text">Mode Gelap</span>
+        </button>
+        <button id="btn-toggle-sidebar" class="sidebar-nav-item collapse-toggle-btn" title="Ciutkan / Lebarkan Menu Samping">
+          <i data-lucide="panel-left-close" id="icon-collapse-sidebar"></i>
+          <span class="nav-label">Ciutkan Menu</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- Mobile Overlay for Sidebar on Small Screens -->
+    <div id="sidebar-mobile-overlay" class="sidebar-overlay" style="display: none;"></div>
+
+    <!-- Main Content Wrapper -->
+    <div class="main-wrapper">
+      <!-- Slim Topbar -->
+      <header class="topbar glass-panel">
+        <div class="topbar-left">
+          <button id="btn-mobile-sidebar" class="btn-icon-square mobile-menu-btn" title="Buka Menu">
+            <i data-lucide="menu"></i>
+          </button>
+          <div class="breadcrumb-container">
+            <span class="breadcrumb-app">ANALYTICS</span>
+            <i data-lucide="chevron-right" class="breadcrumb-sep"></i>
+            <span id="active-view-title" class="breadcrumb-active">Matriks Stok Cabang</span>
+          </div>
+        </div>
+
+        <div class="topbar-actions">
+          <button id="btn-reset-order" class="btn btn-secondary" title="Kembalikan urutan outlet ke default">
+            <i data-lucide="rotate-ccw"></i> <span>Reset Urutan Outlet</span>
+          </button>
+          <button id="btn-export-csv" class="btn btn-primary" title="Ekspor data tabel ke CSV">
+            <i data-lucide="download"></i> <span>Ekspor CSV Bersih</span>
+          </button>
+          <button id="btn-export-xlsx" class="btn btn-success" title="Ekspor data tabel ke Excel .xlsx">
+            <i data-lucide="file-spreadsheet"></i> <span>Ekspor Excel (XLSX)</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Main Content Area -->
+      <main class="main-content">
+        <!-- Global Status Message Bar -->
+        <div id="status-message" class="status-msg info" style="display: none; margin-bottom: 20px;">
+          <i data-lucide="info"></i>
+          <span id="status-text">Memuat data...</span>
+        </div>
+
+    <!-- ============================================================ -->
+    <!-- TAB 1: MATRIKS STOK CABANG (DEFAULT VIEW)                     -->
+    <!-- ============================================================ -->
+    <div id="tab-panel-stock-matrix" class="tab-panel active">
+      
+      <!-- KPI Summary Section -->
+      <section class="dashboard-grid">
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon cyan">
+            <i data-lucide="layers"></i>
+          </div>
+          <div class="card-details">
+            <h3>Total Merk / Brand</h3>
+            <div id="stat-merks" class="card-value">-</div>
+          </div>
+        </div>
+        
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon purple">
+            <i data-lucide="package"></i>
+          </div>
+          <div class="card-details">
+            <h3>Total Jenis Item</h3>
+            <div id="stat-items" class="card-value">-</div>
+          </div>
+        </div>
+        
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon indigo">
+            <i data-lucide="store"></i>
+          </div>
+          <div class="card-details">
+            <h3>Jumlah Outlet Cabang</h3>
+            <div id="stat-outlets" class="card-value">-</div>
+          </div>
+        </div>
+        
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon success">
+            <i data-lucide="check-circle-2"></i>
+          </div>
+          <div class="card-details">
+            <h3>Total Stok (PCS)</h3>
+            <div id="stat-stock" class="card-value">-</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Interactive Filters & Selection -->
+      <section class="glass-panel filter-bar">
+        <div class="filter-group">
+          <label for="date-selector"><i data-lucide="calendar" style="width: 16px; height: 16px; display: inline; vertical-align: middle;"></i> Tanggal Stok:</label>
+          <select id="date-selector">
+            <option value="">Memuat riwayat...</option>
+          </select>
+          <button id="btn-delete-date" class="btn-icon-danger" title="Hapus data tanggal ini dari database" style="display: none;">
+            <i data-lucide="trash-2" style="width: 14px; height: 14px;"></i>
+          </button>
+        </div>
+
+        <div class="filter-group">
+          <label for="merk-selector"><i data-lucide="filter" style="width: 16px; height: 16px; display: inline; vertical-align: middle;"></i> Pilih Merk:</label>
+          <select id="merk-selector">
+            <option value="ALL">-- Tampilkan Semua Merk --</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <div class="search-wrapper">
+            <i data-lucide="search"></i>
+            <input type="text" id="search-input" placeholder="Cari nama barang atau outlet...">
+          </div>
+        </div>
+      </section>
+
+      <!-- Visualization split charts panels -->
+      <section class="vis-section">
+        <div class="glass-panel chart-card">
+          <div class="card-title">
+            <span>Penyebaran Stok per Item</span>
+            <i data-lucide="bar-chart"></i>
+          </div>
+          <div class="chart-container">
+            <canvas id="itemChart"></canvas>
+          </div>
+        </div>
+
+        <div class="glass-panel chart-card">
+          <div class="card-title">
+            <span>Distribusi Total Stok Outlet</span>
+            <i data-lucide="pie-chart"></i>
+          </div>
+          <div class="chart-container">
+            <canvas id="outletChart"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <!-- Main Stock Table Section with Drag & Drop -->
+      <section class="table-section">
+        <div class="table-header-row">
+          <div class="card-title">
+            <span>Tabel Stok (Kolom: Outlet Cabang, Baris: Nama Barang)</span>
+          </div>
+          <div class="table-actions" style="display: flex; align-items: center; gap: 16px;">
+            <span style="font-size: 13px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px;">
+              <i data-lucide="move" style="width: 14px; height: 14px;"></i> Drag header outlet (grip handle) ke kiri/kanan.
+            </span>
+            <button id="btn-fullscreen" class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px; font-weight: 600;">
+              <i data-lucide="maximize" style="width: 14px; height: 14px;"></i> Fullscreen
+            </button>
+          </div>
+        </div>
+
+        <div class="table-wrapper">
+          <table class="stock-table" id="stock-table">
+            <thead>
+              <tr id="table-headers">
+                <th>Barang / Item</th>
+                <th>TOTAL (PCS)</th>
+              </tr>
+            </thead>
+            <tbody id="stock-table-body">
+              <tr>
+                <td colspan="2" style="text-align: center; padding: 40px; color: var(--text-muted);">
+                  Silakan pilih merk atau upload file CSV untuk memuat data tabel.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- TAB 2: REKOMENDASI TRANSFER ANTAR-CABANG (SMART REBALANCING) -->
+    <!-- ============================================================ -->
+    <div id="tab-panel-rebalance" class="tab-panel">
+      
+      <!-- Rebalancing KPI Summary -->
+      <section class="dashboard-grid">
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon cyan">
+            <i data-lucide="arrow-left-right"></i>
+          </div>
+          <div class="card-details">
+            <h3>Rute Pemindahan Disarankan</h3>
+            <div id="stat-rebalance-routes" class="card-value">0</div>
+          </div>
+        </div>
+
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon purple">
+            <i data-lucide="package-check"></i>
+          </div>
+          <div class="card-details">
+            <h3>Total Qty Transfer (PCS)</h3>
+            <div id="stat-rebalance-qty" class="card-value">0</div>
+          </div>
+        </div>
+
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon success">
+            <i data-lucide="shield-check"></i>
+          </div>
+          <div class="card-details">
+            <h3>Cabang Terbantu Dari Kritis</h3>
+            <div id="stat-rebalance-outlets" class="card-value">0</div>
+          </div>
+        </div>
+
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon amber">
+            <i data-lucide="alert-triangle"></i>
+          </div>
+          <div class="card-details">
+            <h3>Tingkat Mendesak (High)</h3>
+            <div id="stat-rebalance-urgent" class="card-value">0</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Filter & Action Bar for Rebalancing -->
+      <section class="glass-panel filter-bar">
+        <div class="filter-group">
+          <label for="rebalance-urgency-filter"><i data-lucide="filter" style="width: 16px; height: 16px; display: inline;"></i> Urgensi:</label>
+          <select id="rebalance-urgency-filter">
+            <option value="ALL">-- Semua Tingkat --</option>
+            <option value="HIGH">🔴 Mendesak (Stok 0 / Kritis)</option>
+            <option value="MEDIUM">🟡 Waspada (&lt; 5 Hari)</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <label for="rebalance-merk-filter"><i data-lucide="layers" style="width: 16px; height: 16px; display: inline;"></i> Merk:</label>
+          <select id="rebalance-merk-filter">
+            <option value="ALL">-- Semua Merk --</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <div class="search-wrapper">
+            <i data-lucide="search"></i>
+            <input type="text" id="rebalance-search-input" placeholder="Cari barang, asal cabang, atau tujuan...">
+          </div>
+        </div>
+
+        <div class="filter-group" style="margin-left: auto;">
+          <button id="btn-export-rebalance" class="btn btn-success">
+            <i data-lucide="file-spreadsheet"></i> Ekspor Slip Transfer (XLSX)
+          </button>
+        </div>
+      </section>
+
+      <!-- Rebalancing Table -->
+      <section class="table-section">
+        <div class="data-table-container">
+          <table class="analytics-table" id="rebalance-table">
+            <thead>
+              <tr>
+                <th style="width: 50px; text-align: center;">No</th>
+                <th>Barang / Item</th>
+                <th>Merk</th>
+                <th>Dari Cabang (Sumber)</th>
+                <th>Ke Cabang (Tujuan)</th>
+                <th style="text-align: right;">Qty Transfer</th>
+                <th style="text-align: center;">Urgensi</th>
+                <th>Alasan & Status Rekomendasi</th>
+              </tr>
+            </thead>
+            <tbody id="rebalance-table-body">
+              <tr>
+                <td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);">
+                  Memuat data rekomendasi transfer antar-cabang...
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- TAB 3: KETAHANAN STOK / DAYS OF COVERAGE (DoC)              -->
+    <!-- ============================================================ -->
+    <div id="tab-panel-coverage" class="tab-panel">
+      
+      <!-- Filter & Action Bar for DoC -->
+      <section class="glass-panel filter-bar">
+        <div class="filter-group">
+          <label for="coverage-status-filter"><i data-lucide="filter" style="width: 16px; height: 16px; display: inline;"></i> Status Ketahanan:</label>
+          <select id="coverage-status-filter">
+            <option value="ALL">-- Semua Status --</option>
+            <option value="CRITICAL">🔴 Kritis (&lt; 2 Hari)</option>
+            <option value="WARNING">🟡 Waspada (2 - 5 Hari)</option>
+            <option value="OPTIMAL">🟢 Optimal (6 - 14 Hari)</option>
+            <option value="OVERSTOCK">🔵 Overstock (&gt; 20 Hari)</option>
+            <option value="DEAD_STOCK">⚪ Dead Stock (0 Penjualan)</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <div class="search-wrapper">
+            <i data-lucide="search"></i>
+            <input type="text" id="coverage-search-input" placeholder="Cari nama barang atau kode...">
+          </div>
+        </div>
+
+        <div class="filter-group" style="margin-left: auto;">
+          <button id="btn-export-coverage" class="btn btn-success">
+            <i data-lucide="file-spreadsheet"></i> Ekspor Ketahanan (XLSX)
+          </button>
+        </div>
+      </section>
+
+      <!-- Coverage Table -->
+      <section class="table-section">
+        <div class="data-table-container">
+          <table class="analytics-table" id="coverage-table">
+            <thead>
+              <tr>
+                <th style="width: 50px; text-align: center;">No</th>
+                <th>Kode</th>
+                <th>Nama Barang</th>
+                <th>Merk</th>
+                <th style="text-align: right;">Stok Total</th>
+                <th style="text-align: right;">Penjualan/Hari (ADS)</th>
+                <th style="text-align: right;">DoC Jaringan</th>
+                <th>Rincian Cabang Kritis / Overstock</th>
+              </tr>
+            </thead>
+            <tbody id="coverage-table-body">
+              <tr>
+                <td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);">
+                  Memuat data analisa ketahanan stok...
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- TAB 4: RENCANA PEMBELIAN (PO PLANNER)                         -->
+    <!-- ============================================================ -->
+    <div id="tab-panel-po-planner" class="tab-panel">
+      
+      <!-- PO KPI Summary -->
+      <section class="dashboard-grid">
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon amber">
+            <i data-lucide="shopping-cart"></i>
+          </div>
+          <div class="card-details">
+            <h3>Item Perlu Dipesan (PO)</h3>
+            <div id="stat-po-items" class="card-value">0</div>
+          </div>
+        </div>
+
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon cyan">
+            <i data-lucide="boxes"></i>
+          </div>
+          <div class="card-details">
+            <h3>Total Estimasi Order (PCS)</h3>
+            <div id="stat-po-qty" class="card-value">0</div>
+          </div>
+        </div>
+
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon purple">
+            <i data-lucide="alert-circle"></i>
+          </div>
+          <div class="card-details">
+            <h3>Order Mendesak (&lt; 3 Hari)</h3>
+            <div id="stat-po-urgent" class="card-value">0</div>
+          </div>
+        </div>
+
+        <div class="glass-panel summary-card glass-panel-interactive">
+          <div class="card-icon success">
+            <i data-lucide="check-circle-2"></i>
+          </div>
+          <div class="card-details">
+            <h3>Target Coverage Jaringan</h3>
+            <div class="card-value">14 Hari</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Filter & Action Bar for PO -->
+      <section class="glass-panel filter-bar">
+        <div class="filter-group">
+          <label for="po-merk-filter"><i data-lucide="layers" style="width: 16px; height: 16px; display: inline;"></i> Merk:</label>
+          <select id="po-merk-filter">
+            <option value="ALL">-- Semua Merk --</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <div class="search-wrapper">
+            <i data-lucide="search"></i>
+            <input type="text" id="po-search-input" placeholder="Cari nama barang atau kode item...">
+          </div>
+        </div>
+
+        <div class="filter-group" style="margin-left: auto;">
+          <button id="btn-export-po" class="btn btn-success">
+            <i data-lucide="file-spreadsheet"></i> Ekspor Draft PO (XLSX)
+          </button>
+        </div>
+      </section>
+
+      <!-- PO Table -->
+      <section class="table-section">
+        <div class="data-table-container">
+          <table class="analytics-table" id="po-table">
+            <thead>
+              <tr>
+                <th style="width: 50px; text-align: center;">No</th>
+                <th>Kode</th>
+                <th>Nama Barang</th>
+                <th>Merk</th>
+                <th style="text-align: right;">Stok Jaringan</th>
+                <th style="text-align: right;">Penjualan/Hari (ADS)</th>
+                <th style="text-align: right;">Sisa Hari (DoC)</th>
+                <th style="text-align: right;">Titik Pesan (ROP)</th>
+                <th style="text-align: right; color: var(--accent-cyan);">Saran Order (PO)</th>
+                <th style="text-align: center;">Tingkat Kebutuhan</th>
+              </tr>
+            </thead>
+            <tbody id="po-table-body">
+              <tr>
+                <td colspan="10" style="text-align: center; padding: 40px; color: var(--text-muted);">
+                  Memuat data rekomendasi pembelian (PO)...
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+        <!-- Footer -->
+        <footer>
+          <p>&copy; 2026 Voucher Stock & Sales Analytics. Didukung oleh Google Antigravity IDE.</p>
+        </footer>
+      </main>
+    </div>
+  </div>
+
+  <!-- Sidebar Drawer Manajemen Database -->
+  <div id="db-sidebar-overlay" class="sidebar-overlay" style="display: none;"></div>
+  <aside id="db-sidebar" class="sidebar-drawer">
+    <div class="sidebar-header">
+      <div class="sidebar-title">
+        <i data-lucide="database"></i>
+        <span>Manajemen Database</span>
+      </div>
+      <button id="btn-close-sidebar" class="btn-close" title="Tutup Sidebar">&times;</button>
+    </div>
+
+    <div class="sidebar-body">
+      <!-- Stats Cards Grid -->
+      <div class="sidebar-stats-grid">
+        <div class="sidebar-stat-card">
+          <span class="stat-label">Ukuran Database</span>
+          <span id="db-stat-size" class="stat-num">-</span>
+        </div>
+        <div class="sidebar-stat-card">
+          <span class="stat-label">Total Laporan Stok</span>
+          <span id="db-stat-reports" class="stat-num">-</span>
+        </div>
+        <div class="sidebar-stat-card">
+          <span class="stat-label">Total Baris Record</span>
+          <span id="db-stat-records" class="stat-num">-</span>
+        </div>
+        <div class="sidebar-stat-card">
+          <span class="stat-label">Rentang Tanggal</span>
+          <span id="db-stat-range" class="stat-num" style="font-size: 11.5px;">-</span>
+        </div>
+      </div>
+
+      <!-- Section: Cadangan & Pemeliharaan -->
+      <div class="sidebar-section-title" style="margin-top: 6px;">
+        <i data-lucide="hard-drive"></i>
+        <span>Cadangan & Pemeliharaan</span>
+      </div>
+      <div class="sidebar-actions-grid">
+        <button id="btn-sidebar-import" class="btn btn-secondary btn-sidebar-action" style="grid-column: span 2; background: rgba(6, 182, 212, 0.15); color: var(--accent-cyan); border: 1px solid rgba(6, 182, 212, 0.4); font-weight: 700;">
+          <i data-lucide="upload-cloud"></i> Buka Menu Import Database
+        </button>
+
+        <a id="btn-download-backup" href="/api/database/backup" class="btn btn-primary btn-sidebar-action" download>
+          <i data-lucide="download"></i> Unduh Cadangan (.db)
+        </a>
+
+        <label for="restore-file-input" class="btn btn-secondary btn-sidebar-action" style="margin: 0; cursor: pointer;">
+          <i data-lucide="upload"></i> Pulihkan (.db)
+          <input type="file" id="restore-file-input" accept=".db" style="display: none;">
+        </label>
+
+        <button id="btn-clear-db" class="btn btn-danger btn-sidebar-action" style="grid-column: span 2;">
+          <i data-lucide="trash-2"></i> Kosongkan Seluruh Database
+        </button>
+      </div>
+
+      <!-- Section: Daftar Riwayat Laporan -->
+      <div class="sidebar-section-title" style="margin-top: 14px;">
+        <i data-lucide="calendar"></i>
+        <span>Riwayat Laporan Stok Tersimpan</span>
+      </div>
+      <div class="sidebar-reports-list" id="db-reports-list">
+        <div style="text-align: center; color: var(--text-muted); padding: 30px 10px;">
+          Memuat riwayat...
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Sidebar Drawer Menu Import Database -->
+  <div id="import-sidebar-overlay" class="sidebar-overlay" style="display: none;"></div>
+  <aside id="import-sidebar" class="sidebar-drawer import-sidebar-drawer">
+    <div class="sidebar-header">
+      <div class="sidebar-title">
+        <i data-lucide="upload-cloud"></i>
+        <span>Menu Import Database</span>
+      </div>
+      <button id="btn-close-import-sidebar" class="btn-close" title="Tutup Sidebar">&times;</button>
+    </div>
+
+    <div class="sidebar-body">
+      <!-- Short Guide -->
+      <div style="font-size: 12px; color: var(--text-secondary); line-height: 1.5; padding: 2px 2px 8px; border-bottom: 1px solid var(--panel-border);">
+        Unggah berkas laporan dari Bee Accounting ke database SQLite. Seluruh data otomatis tersimpan ke riwayat dan langsung terhubung ke modul analisa.
+      </div>
+
+      <!-- 1. Smart Auto-Detect Upload Card -->
+      <div class="sidebar-section-title">
+        <i data-lucide="sparkles"></i>
+        <span>1. Deteksi Otomatis Cerdas (Rekomendasi)</span>
+      </div>
+      <div class="import-dropzone" id="dropzone-auto" style="padding: 20px 14px; margin-top: 0;">
+        <i data-lucide="sparkles" style="color: var(--status-warning);"></i>
+        <h4>Seret Berkas Apa Saja ke Sini</h4>
+        <p>Stok, Penjualan, atau Pembelian otomatis terbaca oleh sistem</p>
+        <input type="file" id="input-file-auto" accept=".csv,.xls,.xlsx" style="display: none;">
+      </div>
+
+      <!-- 2. Specific Upload Cards -->
+      <div class="sidebar-section-title" style="margin-top: 10px;">
+        <i data-lucide="folder-up"></i>
+        <span>2. Unggah Spesifik Berdasarkan Jenis</span>
+      </div>
+
+      <!-- Stock Dropzone Card -->
+      <div class="sidebar-stat-card" style="padding: 12px; display: flex; flex-direction: column; gap: 8px;">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <strong style="font-size: 12.5px; color: var(--accent-cyan); display: flex; align-items: center; gap: 6px;">
+            <i data-lucide="layout-grid" style="width: 15px; height: 15px;"></i> Laporan Stok Harian
+          </strong>
+          <span style="font-size: 10.5px; color: var(--text-muted);">CSV / XLS</span>
+        </div>
+        <div class="import-dropzone" id="dropzone-stock" style="padding: 14px 10px; margin-top: 0;">
+          <h4 style="font-size: 12.5px;">Unggah Berkas Stok</h4>
+          <p style="font-size: 11px;">Klik atau seret berkas stok ke sini</p>
+          <input type="file" id="input-file-stock" accept=".csv,.xls,.xlsx" style="display: none;">
+        </div>
+      </div>
+
+      <!-- Sales Dropzone Card -->
+      <div class="sidebar-stat-card" style="padding: 12px; display: flex; flex-direction: column; gap: 8px;">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <strong style="font-size: 12.5px; color: var(--accent-purple); display: flex; align-items: center; gap: 6px;">
+            <i data-lucide="trending-up" style="width: 15px; height: 15px;"></i> Laporan Penjualan Cabang
+          </strong>
+          <span style="font-size: 10.5px; color: var(--text-muted);">.xls / .xlsx</span>
+        </div>
+        <div class="import-dropzone" id="dropzone-sales" style="padding: 14px 10px; margin-top: 0;">
+          <h4 style="font-size: 12.5px;">Unggah Berkas Penjualan</h4>
+          <p style="font-size: 11px;">Contoh: 14-09-2026.xls</p>
+          <input type="file" id="input-file-sales" accept=".xls,.xlsx,.csv" style="display: none;">
+        </div>
+      </div>
+
+      <!-- Purchase Dropzone Card -->
+      <div class="sidebar-stat-card" style="padding: 12px; display: flex; flex-direction: column; gap: 8px;">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <strong style="font-size: 12.5px; color: var(--status-success); display: flex; align-items: center; gap: 6px;">
+            <i data-lucide="shopping-bag" style="width: 15px; height: 15px;"></i> Laporan Pembelian Barang
+          </strong>
+          <span style="font-size: 10.5px; color: var(--text-muted);">.xls / .xlsx</span>
+        </div>
+        <div class="import-dropzone" id="dropzone-purchases" style="padding: 14px 10px; margin-top: 0;">
+          <h4 style="font-size: 12.5px;">Unggah Berkas Pembelian</h4>
+          <p style="font-size: 11px;">Contoh: DetailPembelian-*.xls</p>
+          <input type="file" id="input-file-purchases" accept=".xls,.xlsx,.csv" style="display: none;">
+        </div>
+      </div>
+
+      <!-- Section 3: Riwayat Batch Data -->
+      <div class="sidebar-section-title" style="margin-top: 12px;">
+        <i data-lucide="history"></i>
+        <span>3. Riwayat Batch Penjualan & Pembelian</span>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 10px;">
+        <div>
+          <span style="font-size: 11px; font-weight: 700; color: var(--accent-purple); text-transform: uppercase;">Batch Penjualan</span>
+          <div id="import-history-sales" style="margin-top: 6px; max-height: 180px; overflow-y: auto;">
+            <p style="color: var(--text-muted); font-size: 11.5px;">Memuat data...</p>
+          </div>
+        </div>
+
+        <div>
+          <span style="font-size: 11px; font-weight: 700; color: var(--status-success); text-transform: uppercase;">Batch Pembelian</span>
+          <div id="import-history-purchases" style="margin-top: 6px; max-height: 180px; overflow-y: auto;">
+            <p style="color: var(--text-muted); font-size: 11.5px;">Memuat data...</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </aside>
+
+  <!-- Load internal Javascript Modules -->
+  <script src="data/stock-data.js?v=2.5"></script>
+  <script src="js/stock-analytics.js?v=2.5"></script>
+  <script src="js/outlet-sorter.js?v=2.5"></script>
+  <script src="js/inventory-rebalancer.js?v=2.5"></script>
+  <script src="js/app.js?v=2.5"></script>
+  
+  <!-- Auto-initialize lucide icons -->
+  <script>
+    lucide.createIcons();
+  </script>
+</body>
+</html>

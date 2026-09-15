@@ -1,0 +1,47 @@
+name: laporan-stock
+
+services:
+  app:
+    container_name: laporan-stock-app
+    image: laporan-stock:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - HOST=0.0.0.0
+      - DB_PATH=/app/data/stock_history.db
+    volumes:
+      # Data persisten database SQLite di host ZimaOS
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/api/dates', (res) => process.exit(res.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    x-casaos:
+      envs:
+        - container: PORT
+          description:
+            en_us: Web Application Port
+            id_id: Port Aplikasi Web
+      ports:
+        - container: "3000"
+          description:
+            en_us: Web UI
+            id_id: Tampilan Web
+      volumes:
+        - container: /app/data
+          description:
+            en_us: SQLite Database & Stock CSVs
+            id_id: Database SQLite & Data Laporan Stok
+      title:
+        en_us: Voucher Stock Analytics
+        id_id: Analisa Stok Voucher
+      icon: https://cdn-icons-png.flaticon.com/512/2920/2920349.png
+      category: Productivity
+      developer: Antigravity
+      author: User

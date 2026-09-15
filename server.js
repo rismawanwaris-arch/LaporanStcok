@@ -1,0 +1,603 @@
+/**
+ * Lightweight HTTP Server & REST API for Voucher Stock Analytics.
+ * Handles Stock, Sales, and Purchase files (.csv, .xls, .xlsx).
+ * Zero external npm dependencies other than SheetJS (xlsx). Ready for Docker and ZimaOS.
+ */
+
+const http = require('http');
+const path = require('path');
+const fs = require('fs');
+const XLSX = require('xlsx');
+
+const StockDatabase = require('./database');
+const StockDataParser = require('./data/stock-data');
+const StockAnalytics = require('./js/stock-analytics');
+const TransactionParser = require('./data/transaction-parser');
+const InventoryRebalancer = require('./js/inventory-rebalancer');
+
+const PORT = parseInt(process.env.PORT, 10) || 3000;
+const HOST = process.env.HOST || '0.0.0.0';
+
+const db = new StockDatabase();
+
+// Auto-seed initial reports if database is empty
+function autoSeedDefaultReports() {
+  try {
+    // 1. Stock report
+    const stockDates = db.getAllDates();
+    if (stockDates.length === 0) {
+      const csvPath = path.join(__dirname, '1308 vcr.csv');
+      if (fs.existsSync(csvPath)) {
+        console.log('[Seed] Memuat data stok awal dari 1308 vcr.csv...');
+        const csvText = fs.readFileSync(csvPath, 'utf8');
+        const reportDate = extractDateFromCSV(csvText, '1308 vcr.csv');
+        const parsed = StockDataParser.parse(csvText);
+        const overview = StockAnalytics.getOverview(parsed);
+        db.saveReport(reportDate, '1308 vcr.csv', parsed, overview);
+        console.log(`[Seed] Data stok awal disimpan untuk tanggal ${reportDate}!`);
+      }
+    }
+
+    // 2. Sales report
+    const salesBatches = db.getAllSalesBatches();
+    if (salesBatches.length === 0) {
+      const salesPath = path.join(__dirname, '14-09-2026.xls');
+      if (fs.existsSync(salesPath)) {
+        console.log('[Seed] Memuat data penjualan awal dari 14-09-2026.xls...');
+        const parsedSales = TransactionParser.parseSales(salesPath);
+        db.saveSalesBatch(parsedSales.batchDate, '14-09-2026.xls', parsedSales);
+        console.log(`[Seed] Data penjualan awal disimpan untuk tanggal ${parsedSales.batchDate}!`);
+      }
+    }
+
+    // 3. Purchase report
+    const purchBatches = db.getAllPurchaseBatches();
+    if (purchBatches.length === 0) {
+      const purchPath = path.join(__dirname, 'DetailPembelian-2026-09-15-sd-2026-09-15.xls');
+      if (fs.existsSync(purchPath)) {
+        console.log('[Seed] Memuat data pembelian awal dari DetailPembelian-2026-09-15-sd-2026-09-15.xls...');
+        const parsedPurch = TransactionParser.parsePurchases(purchPath);
+        db.savePurchaseBatch(parsedPurch.batchDate, 'DetailPembelian-2026-09-15-sd-2026-09-15.xls', parsedPurch);
+        console.log(`[Seed] Data pembelian awal disimpan untuk tanggal ${parsedPurch.batchDate}!`);
+      }
+    }
+  } catch (err) {
+    console.warn('[Seed] Gagal auto-seed data default:', err.message);
+  }
+}
+
+/**
+ * Extracts report date (YYYY-MM-DD) from CSV text or filename.
+ */
+function extractDateFromCSV(csvText, fallbackFilename) {
+  if (csvText) {
+    const match = csvText.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+    if (match) {
+      const d = match[1].padStart(2, '0');
+      const m = match[2].padStart(2, '0');
+      const y = match[3];
+      return `${y}-${m}-${d}`;
+    }
+  }
+
+  if (fallbackFilename) {
+    const fnMatch = fallbackFilename.match(/^(\d{2})(\d{2})/);
+    if (fnMatch) {
+      const year = new Date().getFullYear();
+      return `${year}-${fnMatch[2]}-${fnMatch[1]}`;
+    }
+  }
+
+  return new Date().toISOString().split('T')[0];
+}
+
+// MIME types mapping
+const MIME_TYPES = {
+  '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.csv': 'text/csv; charset=utf-8',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon'
+};
+
+function sendJson(res, statusCode, data) {
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type'
+  });
+  res.end(JSON.stringify(data));
+}
+
+// Helper to read JSON body safely
+function readJsonBody(req, res, callback) {
+  let body = '';
+  req.on('data', chunk => {
+    body += chunk;
+    if (body.length > 35 * 1024 * 1024) { // 35MB max
+      req.socket.destroy();
+    }
+  });
+
+  req.on('end', () => {
+    try {
+      const payload = JSON.parse(body);
+      callback(payload);
+    } catch (err) {
+      return sendJson(res, 400, { success: false, message: 'Format JSON request tidak valid: ' + err.message });
+    }
+  });
+}
+
+function getBufferFromPayload(payload) {
+  if (payload.fileBase64) {
+    const base64Str = payload.fileBase64.replace(/^data:.*?;base64,/, '');
+    return Buffer.from(base64Str, 'base64');
+  }
+  if (payload.csvText) {
+    return Buffer.from(payload.csvText, 'utf8');
+  }
+  return null;
+}
+
+/**
+ * Converts a stock report buffer to CSV text, transcoding binary .xls/.xlsx
+ * via SheetJS first (StockDataParser only understands raw CSV lines).
+ */
+function bufferToStockCsvText(buffer, filename) {
+  const isExcel = filename && /\.xlsx?$/i.test(filename);
+  if (!isExcel) {
+    return buffer.toString('utf8');
+  }
+  const wb = XLSX.read(buffer, { type: 'buffer' });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  return XLSX.utils.sheet_to_csv(sheet);
+}
+
+const server = http.createServer((req, res) => {
+  // CORS Preflight
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type'
+    });
+    return res.end();
+  }
+
+  const parsedUrl = new URL(req.url, 'http://localhost');
+  const pathname = parsedUrl.pathname;
+
+  // --- API ROUTES ---
+
+  // 1. Stock Dates & Data
+  if (req.method === 'GET' && pathname === '/api/dates') {
+    try {
+      const dates = db.getAllDates();
+      return sendJson(res, 200, { success: true, dates });
+    } catch (err) {
+      return sendJson(res, 500, { success: false, message: err.message });
+    }
+  }
+
+  if (req.method === 'GET' && pathname === '/api/stock') {
+    try {
+      const reportDate = parsedUrl.searchParams.get('date');
+      if (!reportDate) {
+        return sendJson(res, 400, { success: false, message: 'Parameter "date" wajib disertakan.' });
+      }
+
+      const report = db.getReportByDate(reportDate);
+      if (!report) {
+        return sendJson(res, 404, { success: false, message: `Laporan untuk tanggal ${reportDate} tidak ditemukan.` });
+      }
+
+      return sendJson(res, 200, { success: true, report });
+    } catch (err) {
+      return sendJson(res, 500, { success: false, message: err.message });
+    }
+  }
+
+  // Stock CSV Upload
+  if (req.method === 'POST' && pathname === '/api/upload') {
+    readJsonBody(req, res, (payload) => {
+      try {
+        const { filename, csvText, fileBase64, customDate } = payload;
+        let textContent = csvText;
+
+        if (!textContent && fileBase64) {
+          const buf = getBufferFromPayload(payload);
+          textContent = bufferToStockCsvText(buf, filename);
+        }
+
+        if (!textContent || typeof textContent !== 'string') {
+          return sendJson(res, 400, { success: false, message: 'Data stok CSV tidak valid.' });
+        }
+
+        const reportDate = customDate || extractDateFromCSV(textContent, filename);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(reportDate)) {
+          return sendJson(res, 400, { success: false, message: 'Format tanggal harus YYYY-MM-DD.' });
+        }
+
+        const parsed = StockDataParser.parse(textContent);
+        if (!parsed.merks || Object.keys(parsed.merks).length === 0) {
+          return sendJson(res, 400, { success: false, message: 'Format CSV stok tidak dikenali atau kosong.' });
+        }
+
+        const overview = StockAnalytics.getOverview(parsed);
+        const saved = db.saveReport(reportDate, filename || 'upload.csv', parsed, overview);
+
+        console.log(`[Upload Stok] Tersimpan untuk tanggal: ${reportDate} (${filename})`);
+        return sendJson(res, 200, {
+          success: true,
+          message: `Laporan stok tanggal ${reportDate} berhasil disimpan!`,
+          reportDate,
+          summary: saved
+        });
+      } catch (err) {
+        console.error('[Upload Stok Error]', err);
+        return sendJson(res, 500, { success: false, message: 'Gagal memproses file stok: ' + err.message });
+      }
+    });
+    return;
+  }
+
+  // DELETE Stock Report
+  if (req.method === 'DELETE' && pathname === '/api/report') {
+    try {
+      const reportDate = parsedUrl.searchParams.get('date');
+      if (!reportDate) {
+        return sendJson(res, 400, { success: false, message: 'Parameter "date" wajib disertakan.' });
+      }
+
+      const deleted = db.deleteReportByDate(reportDate);
+      if (!deleted) {
+        return sendJson(res, 404, { success: false, message: `Laporan tanggal ${reportDate} tidak ditemukan.` });
+      }
+
+      return sendJson(res, 200, { success: true, message: `Laporan tanggal ${reportDate} berhasil dihapus.` });
+    } catch (err) {
+      return sendJson(res, 500, { success: false, message: err.message });
+    }
+  }
+
+  // 2. Sales Batch API
+  if (req.method === 'GET' && pathname === '/api/sales/batches') {
+    try {
+      const batches = db.getAllSalesBatches();
+      return sendJson(res, 200, { success: true, batches });
+    } catch (err) {
+      return sendJson(res, 500, { success: false, message: err.message });
+    }
+  }
+
+  if (req.method === 'POST' && pathname === '/api/upload-sales') {
+    readJsonBody(req, res, (payload) => {
+      try {
+        const buffer = getBufferFromPayload(payload);
+        if (!buffer) {
+          return sendJson(res, 400, { success: false, message: 'Data berkas penjualan tidak ditemukan.' });
+        }
+
+        const parsed = TransactionParser.parseSales(buffer);
+        const batchDate = payload.customDate || parsed.batchDate;
+        const saved = db.saveSalesBatch(batchDate, payload.filename || 'sales.xls', parsed);
+
+        console.log(`[Upload Penjualan] ${parsed.totalRows} baris tersimpan untuk tanggal ${batchDate}`);
+        return sendJson(res, 200, {
+          success: true,
+          message: `Laporan penjualan tanggal ${batchDate} (${parsed.totalRows} transaksi) berhasil disimpan!`,
+          batchDate,
+          summary: saved
+        });
+      } catch (err) {
+        console.error('[Upload Penjualan Error]', err);
+        return sendJson(res, 500, { success: false, message: 'Gagal memproses file penjualan: ' + err.message });
+      }
+    });
+    return;
+  }
+
+  if (req.method === 'DELETE' && pathname === '/api/sales') {
+    try {
+      const batchDate = parsedUrl.searchParams.get('date');
+      if (!batchDate) return sendJson(res, 400, { success: false, message: 'Parameter "date" wajib disertakan.' });
+      const deleted = db.deleteSalesBatch(batchDate);
+      if (!deleted) {
+        return sendJson(res, 404, { success: false, message: `Data penjualan tanggal ${batchDate} tidak ditemukan.` });
+      }
+      return sendJson(res, 200, { success: true, message: `Data penjualan tanggal ${batchDate} berhasil dihapus.` });
+    } catch (err) {
+      return sendJson(res, 500, { success: false, message: err.message });
+    }
+  }
+
+  // 3. Purchases Batch API
+  if (req.method === 'GET' && pathname === '/api/purchases/batches') {
+    try {
+      const batches = db.getAllPurchaseBatches();
+      return sendJson(res, 200, { success: true, batches });
+    } catch (err) {
+      return sendJson(res, 500, { success: false, message: err.message });
+    }
+  }
+
+  if (req.method === 'POST' && pathname === '/api/upload-purchases') {
+    readJsonBody(req, res, (payload) => {
+      try {
+        const buffer = getBufferFromPayload(payload);
+        if (!buffer) {
+          return sendJson(res, 400, { success: false, message: 'Data berkas pembelian tidak ditemukan.' });
+        }
+
+        const parsed = TransactionParser.parsePurchases(buffer);
+        const batchDate = payload.customDate || parsed.batchDate;
+        const saved = db.savePurchaseBatch(batchDate, payload.filename || 'purchases.xls', parsed);
+
+        console.log(`[Upload Pembelian] ${parsed.totalRows} baris tersimpan untuk tanggal ${batchDate}`);
+        return sendJson(res, 200, {
+          success: true,
+          message: `Laporan pembelian tanggal ${batchDate} (${parsed.totalRows} transaksi) berhasil disimpan!`,
+          batchDate,
+          summary: saved
+        });
+      } catch (err) {
+        console.error('[Upload Pembelian Error]', err);
+        return sendJson(res, 500, { success: false, message: 'Gagal memproses file pembelian: ' + err.message });
+      }
+    });
+    return;
+  }
+
+  if (req.method === 'DELETE' && pathname === '/api/purchases') {
+    try {
+      const batchDate = parsedUrl.searchParams.get('date');
+      if (!batchDate) return sendJson(res, 400, { success: false, message: 'Parameter "date" wajib disertakan.' });
+      const deleted = db.deletePurchaseBatch(batchDate);
+      if (!deleted) {
+        return sendJson(res, 404, { success: false, message: `Data pembelian tanggal ${batchDate} tidak ditemukan.` });
+      }
+      return sendJson(res, 200, { success: true, message: `Data pembelian tanggal ${batchDate} berhasil dihapus.` });
+    } catch (err) {
+      return sendJson(res, 500, { success: false, message: err.message });
+    }
+  }
+
+  // 4. Smart Auto Upload (detects whether it is Stock, Sales, or Purchase automatically!)
+  if (req.method === 'POST' && pathname === '/api/upload-auto') {
+    readJsonBody(req, res, (payload) => {
+      try {
+        const buffer = getBufferFromPayload(payload);
+        if (!buffer) return sendJson(res, 400, { success: false, message: 'Berkas kosong.' });
+
+        const detectedType = TransactionParser.detectType(buffer);
+
+        if (detectedType === 'sales') {
+          const parsed = TransactionParser.parseSales(buffer);
+          const batchDate = payload.customDate || parsed.batchDate;
+          const saved = db.saveSalesBatch(batchDate, payload.filename || 'sales.xls', parsed);
+          return sendJson(res, 200, {
+            success: true,
+            type: 'sales',
+            message: `Otomatis terdeteksi: Laporan Penjualan (${parsed.totalRows} transaksi) tanggal ${batchDate}!`,
+            summary: saved
+          });
+        }
+
+        if (detectedType === 'purchases') {
+          const parsed = TransactionParser.parsePurchases(buffer);
+          const batchDate = payload.customDate || parsed.batchDate;
+          const saved = db.savePurchaseBatch(batchDate, payload.filename || 'purchases.xls', parsed);
+          return sendJson(res, 200, {
+            success: true,
+            type: 'purchases',
+            message: `Otomatis terdeteksi: Laporan Pembelian (${parsed.totalRows} transaksi) tanggal ${batchDate}!`,
+            summary: saved
+          });
+        }
+
+        // Default or Stock CSV
+        const textContent = bufferToStockCsvText(buffer, payload.filename);
+        const reportDate = payload.customDate || extractDateFromCSV(textContent, payload.filename);
+        const parsed = StockDataParser.parse(textContent);
+        if (parsed.merks && Object.keys(parsed.merks).length > 0) {
+          const overview = StockAnalytics.getOverview(parsed);
+          const saved = db.saveReport(reportDate, payload.filename || 'upload.csv', parsed, overview);
+          return sendJson(res, 200, {
+            success: true,
+            type: 'stock',
+            message: `Otomatis terdeteksi: Laporan Stok (${overview.global.totalItems} item) tanggal ${reportDate}!`,
+            summary: saved
+          });
+        }
+
+        return sendJson(res, 400, { success: false, message: 'Format berkas tidak dikenali sebagai Stok, Penjualan, ataupun Pembelian.' });
+      } catch (err) {
+        console.error('[Upload Auto Error]', err);
+        return sendJson(res, 500, { success: false, message: 'Gagal memproses berkas otomatis: ' + err.message });
+      }
+    });
+    return;
+  }
+
+  // 5. Analytics & Rebalancing APIs
+  if (req.method === 'GET' && pathname === '/api/analytics/integrated') {
+    try {
+      const stockDate = parsedUrl.searchParams.get('stockDate') || undefined;
+      const days = parseInt(parsedUrl.searchParams.get('days') || '1', 10);
+      const data = db.getIntegratedData(stockDate, days);
+      return sendJson(res, 200, { success: true, data });
+    } catch (err) {
+      return sendJson(res, 500, { success: false, message: err.message });
+    }
+  }
+
+  if (req.method === 'GET' && pathname === '/api/analytics/rebalancing') {
+    try {
+      const stockDate = parsedUrl.searchParams.get('stockDate') || undefined;
+      const days = parseInt(parsedUrl.searchParams.get('days') || '1', 10);
+      const targetDays = parseInt(parsedUrl.searchParams.get('targetDays') || '7', 10);
+      const integrated = db.getIntegratedData(stockDate, days);
+      const recommendations = InventoryRebalancer.generateTransferRecommendations(integrated, { targetDays });
+      return sendJson(res, 200, {
+        success: true,
+        stockDate: integrated.stockDate,
+        salesDates: integrated.salesDates,
+        count: recommendations.length,
+        recommendations
+      });
+    } catch (err) {
+      return sendJson(res, 500, { success: false, message: err.message });
+    }
+  }
+
+  if (req.method === 'GET' && pathname === '/api/analytics/po') {
+    try {
+      const stockDate = parsedUrl.searchParams.get('stockDate') || undefined;
+      const days = parseInt(parsedUrl.searchParams.get('days') || '1', 10);
+      const targetDays = parseInt(parsedUrl.searchParams.get('targetDays') || '14', 10);
+      const integrated = db.getIntegratedData(stockDate, days);
+      const poSuggestions = InventoryRebalancer.generatePOSuggestions(integrated, { targetDays });
+      return sendJson(res, 200, {
+        success: true,
+        stockDate: integrated.stockDate,
+        salesDates: integrated.salesDates,
+        count: poSuggestions.length,
+        suggestions: poSuggestions
+      });
+    } catch (err) {
+      return sendJson(res, 500, { success: false, message: err.message });
+    }
+  }
+
+  if (req.method === 'GET' && pathname === '/api/analytics/fsn') {
+    try {
+      const stockDate = parsedUrl.searchParams.get('stockDate') || undefined;
+      const days = parseInt(parsedUrl.searchParams.get('days') || '1', 10);
+      const integrated = db.getIntegratedData(stockDate, days);
+      const fsn = InventoryRebalancer.classifyFSN(integrated);
+      return sendJson(res, 200, { success: true, fsn });
+    } catch (err) {
+      return sendJson(res, 500, { success: false, message: err.message });
+    }
+  }
+
+  // 6. Database Management APIs
+  if (req.method === 'GET' && pathname === '/api/database/info') {
+    try {
+      const info = db.getDatabaseInfo();
+      return sendJson(res, 200, { success: true, info });
+    } catch (err) {
+      return sendJson(res, 500, { success: false, message: err.message });
+    }
+  }
+
+  if (req.method === 'GET' && pathname === '/api/database/backup') {
+    try {
+      const dbFile = db.dbPath;
+      if (!fs.existsSync(dbFile)) {
+        return sendJson(res, 404, { success: false, message: 'File database tidak ditemukan.' });
+      }
+      const stat = fs.statSync(dbFile);
+      const today = new Date().toISOString().split('T')[0];
+      const filename = `stock_history_backup_${today}.db`;
+
+      res.writeHead(200, {
+        'Content-Type': 'application/x-sqlite3',
+        'Content-Length': stat.size,
+        'Content-Disposition': `attachment; filename="${filename}"`
+      });
+      const stream = fs.createReadStream(dbFile);
+      return stream.pipe(res);
+    } catch (err) {
+      return sendJson(res, 500, { success: false, message: err.message });
+    }
+  }
+
+  if (req.method === 'POST' && pathname === '/api/database/clear') {
+    try {
+      db.clearAllData();
+      return sendJson(res, 200, { success: true, message: 'Seluruh data di database berhasil dikosongkan.' });
+    } catch (err) {
+      return sendJson(res, 500, { success: false, message: err.message });
+    }
+  }
+
+  if (req.method === 'POST' && pathname === '/api/database/restore') {
+    const chunks = [];
+    req.on('data', chunk => chunks.push(chunk));
+    req.on('end', () => {
+      try {
+        const buffer = Buffer.concat(chunks);
+        if (buffer.length < 16) {
+          return sendJson(res, 400, { success: false, message: 'File database tidak valid atau kosong.' });
+        }
+        const header = buffer.subarray(0, 16).toString();
+        if (!header.startsWith('SQLite format 3')) {
+          return sendJson(res, 400, { success: false, message: 'Format berkas harus berupa file database SQLite (.db).' });
+        }
+
+        db.close();
+        fs.writeFileSync(db.dbPath, buffer);
+        const { DatabaseSync } = require('node:sqlite');
+        db.db = new DatabaseSync(db.dbPath);
+        db.initSchema();
+
+        return sendJson(res, 200, { success: true, message: 'Database berhasil dipulihkan (restore)!' });
+      } catch (err) {
+        return sendJson(res, 500, { success: false, message: 'Gagal mempulihkan database: ' + err.message });
+      }
+    });
+    return;
+  }
+
+  // --- STATIC FILE SERVING ---
+  let safePath = pathname === '/' ? '/index.html' : pathname;
+  const normalizedPath = path.normalize(safePath).replace(/^(\.\.[\/\\])+/, '');
+  const filePath = path.join(__dirname, normalizedPath);
+
+  fs.stat(filePath, (err, stats) => {
+    if (err || !stats.isFile()) {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      return res.end('404 Not Found');
+    }
+
+    const ext = path.extname(filePath).toLowerCase();
+    const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+
+    res.writeHead(200, {
+      'Content-Type': contentType,
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0'
+    });
+    const stream = fs.createReadStream(filePath);
+    stream.pipe(res);
+  });
+});
+
+autoSeedDefaultReports();
+
+server.listen(PORT, HOST, () => {
+  console.log(`====================================================`);
+  console.log(`🚀 Voucher Analytics & Rebalancing Server Berjalan!`);
+  console.log(`📡 URL Lokal:   http://localhost:${PORT}`);
+  console.log(`🌐 URL Network: http://${HOST}:${PORT}`);
+  console.log(`💾 Database:    ${db.dbPath}`);
+  console.log(`====================================================`);
+});
+
+process.on('SIGINT', () => {
+  console.log('\n[Shutdown] Menutup koneksi database dan server...');
+  db.close();
+  server.close(() => {
+    process.exit(0);
+  });
+});
