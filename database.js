@@ -190,6 +190,8 @@ class StockDatabase {
       throw err;
     }
 
+    this.backupDatabase();
+
     return {
       id: reportId,
       reportDate,
@@ -292,6 +294,8 @@ class StockDatabase {
       throw err;
     }
 
+    this.backupDatabase();
+
     return {
       id: batchId,
       batchDate,
@@ -374,6 +378,8 @@ class StockDatabase {
       this.db.exec('ROLLBACK;');
       throw err;
     }
+
+    this.backupDatabase();
 
     return {
       id: batchId,
@@ -1025,6 +1031,21 @@ class StockDatabase {
     const stockRange = this.db.prepare(`SELECT MIN(report_date) as firstDate, MAX(report_date) as latestDate FROM reports`).get();
     const salesRange = this.db.prepare(`SELECT MIN(batch_date) as firstDate, MAX(batch_date) as latestDate FROM sales_batches`).get();
 
+    let backupCount = 0;
+    let latestBackupAt = null;
+    try {
+      const backupDir = path.join(path.dirname(this.dbPath), 'backups');
+      if (fs.existsSync(backupDir)) {
+        const files = fs.readdirSync(backupDir).filter(f => f.startsWith('stock_history_') && f.endsWith('.db')).sort();
+        backupCount = files.length;
+        if (files.length > 0) {
+          latestBackupAt = fs.statSync(path.join(backupDir, files[files.length - 1])).mtime.toISOString();
+        }
+      }
+    } catch (e) {
+      console.warn('Could not read backup folder info', e);
+    }
+
     return {
       fileSizeBytes: fileSize,
       fileSizeFormatted: fileSize >= 1024 * 1024 ? (fileSize / (1024 * 1024)).toFixed(2) + ' MB' : (fileSize / 1024).toFixed(1) + ' KB',
@@ -1043,11 +1064,53 @@ class StockDatabase {
         first: salesRange.firstDate || '-',
         latest: salesRange.latestDate || '-'
       },
-      dbPath: this.dbPath
+      dbPath: this.dbPath,
+      autoBackup: {
+        count: backupCount,
+        latestAt: latestBackupAt
+      }
     };
   }
 
+  /**
+   * Copies the live .db file into a `backups/` subfolder next to it, keeping
+   * only the most recent MAX_BACKUPS copies. Runs after every successful
+   * upload (and before a destructive clear) so a recent restore point always
+   * sits inside the same persistent volume as the live database — this
+   * guards against accidental deletion/corruption, not against the volume
+   * itself being unmounted or missing (see README for the ZimaOS volume
+   * mapping that persistence actually depends on).
+   */
+  backupDatabase() {
+    const MAX_BACKUPS = 14;
+    try {
+      if (!fs.existsSync(this.dbPath)) return;
+
+      const backupDir = path.join(path.dirname(this.dbPath), 'backups');
+      if (!fs.existsSync(backupDir)) {
+        fs.mkdirSync(backupDir, { recursive: true });
+      }
+
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const backupPath = path.join(backupDir, `stock_history_${timestamp}.db`);
+      fs.copyFileSync(this.dbPath, backupPath);
+
+      const files = fs.readdirSync(backupDir)
+        .filter(f => f.startsWith('stock_history_') && f.endsWith('.db'))
+        .sort(); // ISO-formatted names sort chronologically
+      if (files.length > MAX_BACKUPS) {
+        files.slice(0, files.length - MAX_BACKUPS).forEach(f => {
+          fs.unlinkSync(path.join(backupDir, f));
+        });
+      }
+    } catch (err) {
+      // Never let a backup failure break the actual save that triggered it
+      console.warn('[Backup] Gagal membuat cadangan otomatis:', err.message);
+    }
+  }
+
   clearAllData() {
+    this.backupDatabase(); // safety snapshot right before a destructive wipe
     this.db.exec(`
       DELETE FROM stock_records;
       DELETE FROM reports;

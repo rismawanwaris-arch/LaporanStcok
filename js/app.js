@@ -991,6 +991,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const dbStatReports = document.getElementById('db-stat-reports');
     const dbStatRecords = document.getElementById('db-stat-records');
     const dbStatRange = document.getElementById('db-stat-range');
+    const dbStatAutoBackup = document.getElementById('db-stat-autobackup');
     const dbReportsList = document.getElementById('db-reports-list');
     if (!dbReportsList) return;
 
@@ -1011,6 +1012,12 @@ document.addEventListener('DOMContentLoaded', () => {
           dbStatRange.textContent = json.info.totalReports > 0
             ? `${formatDateDisplay(json.info.stockRange.first)} s/d ${formatDateDisplay(json.info.stockRange.latest)}`
             : '-';
+          if (dbStatAutoBackup) {
+            const ab = json.info.autoBackup;
+            dbStatAutoBackup.textContent = ab && ab.count > 0
+              ? `${ab.count}x · ${new Date(ab.latestAt).toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'short' })}`
+              : 'Belum ada';
+          }
         }
       }
     } catch (e) {

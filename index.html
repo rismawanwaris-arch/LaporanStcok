@@ -1069,7 +1069,7 @@
         </div>
 
         <!-- Stats Cards Grid -->
-        <div class="sidebar-stats-grid" style="grid-template-columns: repeat(4, 1fr);">
+        <div class="sidebar-stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));">
           <div class="sidebar-stat-card">
             <span class="stat-label">Ukuran Database</span>
             <span id="db-stat-size" class="stat-num">-</span>
@@ -1086,10 +1086,19 @@
             <span class="stat-label">Rentang Tanggal</span>
             <span id="db-stat-range" class="stat-num" style="font-size: 11.5px;">-</span>
           </div>
+          <div class="sidebar-stat-card">
+            <span class="stat-label">Cadangan Otomatis</span>
+            <span id="db-stat-autobackup" class="stat-num" style="font-size: 11.5px;">-</span>
+          </div>
+        </div>
+
+        <div style="margin-top: 14px; padding: 12px 14px; border-radius: var(--radius-md); background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.25); font-size: 12px; color: var(--text-secondary); display: flex; gap: 10px; align-items: flex-start;">
+          <i data-lucide="shield-alert" style="width: 16px; height: 16px; min-width: 16px; color: var(--status-warning); margin-top: 1px;"></i>
+          <span>Sistem otomatis menyimpan cadangan setiap kali ada data baru diunggah (lihat "Cadangan Otomatis" di atas). Tapi cadangan ini tersimpan di folder yang sama dengan database utama — kalau volume penyimpanan container hilang, cadangan otomatis ini <strong>ikut hilang juga</strong>. Untuk perlindungan sungguhan, unduh cadangan (.db) secara berkala dan simpan di tempat lain (Google Drive, laptop, dll).</span>
         </div>
 
         <!-- Section: Cadangan & Pemeliharaan -->
-        <div class="sidebar-section-title" style="margin-top: 22px;">
+        <div class="sidebar-section-title" style="margin-top: 18px;">
           <i data-lucide="hard-drive"></i>
           <span>Cadangan & Pemeliharaan</span>
         </div>

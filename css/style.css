@@ -92,6 +92,10 @@ body {
   color: var(--text-primary);
   min-height: 100vh;
   line-height: 1.6;
+  /* Root element (html) has default overflow:visible, so per the CSS spec
+     this overflow is propagated up to become the viewport's own scroll
+     behavior rather than making <body> a separate scrolling box — safe to
+     clip horizontal overflow here without breaking sticky descendants. */
   overflow-x: hidden;
 }
 
@@ -139,7 +143,13 @@ body {
   display: flex;
   min-height: 100vh;
   width: 100vw;
-  overflow-x: hidden;
+  /* No overflow-x here: pairing it with overflow-y would make the browser
+     promote overflow-y to "auto" too (per spec, whenever the two axes
+     differ and one is "visible", that one becomes "auto" instead — there's
+     no way to keep it "visible"). That would make .app-layout itself a
+     scroll container and break position:sticky on the child sidebar, which
+     needs the real page viewport as its scrolling ancestor. body{} already
+     clips horizontal overflow for the whole page. */
   position: relative;
 }
 
@@ -359,7 +369,9 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-  overflow-x: hidden;
+  /* No overflow-x here — see .app-layout comment: it isn't a sticky ancestor
+     for the sidebar, but keeping it overflow:visible avoids the same
+     hidden/visible-axis promotion-to-auto trap for anything sticky inside it. */
 }
 
 .topbar {
