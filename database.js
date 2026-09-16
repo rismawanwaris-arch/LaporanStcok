@@ -421,6 +421,8 @@ class StockDatabase {
    * @param {number} [daysWindow=1] - Days of sales to consider for ADS
    */
   getIntegratedData(stockDate, daysWindow = 1) {
+    const itemGroupMap = this.getItemGroupByCode();
+
     // 1. Pick stock date
     let targetStockDate = stockDate;
     if (!targetStockDate) {
@@ -470,6 +472,7 @@ class StockDatabase {
           code,
           name: name || '',
           merk: merk || 'LAINNYA',
+          itemGroup: itemGroupMap[code] || 'LAINNYA',
           totalStock: 0,
           totalSold: 0,
           totalPurchased: 0,
@@ -562,7 +565,8 @@ class StockDatabase {
       salesDaysCount: numSalesDays,
       totalItemsCount: Object.keys(itemsMap).length,
       allOutlets: Array.from(outletsSet),
-      items: itemsMap
+      items: itemsMap,
+      availableItemGroups: this.getDistinctItemGroups()
     };
   }
 

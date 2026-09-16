@@ -40,7 +40,11 @@ document.addEventListener('DOMContentLoaded', () => {
     sorterInstance: null,
     currentDate: '',
     datesList: [],
-    isBackendAvailable: false
+    isBackendAvailable: false,
+    // item_code -> item_group ("VOUCHER"/"PETSHOP"/etc.), derived from sales
+    // history. The stock CSV itself has no category column, so this is
+    // fetched once separately and cross-referenced when filtering the table.
+    itemGroupMap: {}
   };
 
   // DOM Elements
@@ -84,9 +88,26 @@ document.addEventListener('DOMContentLoaded', () => {
     setupVendorAnalysisControls();
     setupTrendAnalysisControls();
     setupImportCenter();
-    
+
     // Check backend API and database first, fallback to static CSV
     checkBackendAndLoad();
+    loadItemGroupMap();
+  }
+
+  // Fetches the item_code -> item_group (category) map derived from sales
+  // history, used to filter/label the Matriks Stok Cabang table by category
+  // even though the stock CSV itself carries no category column.
+  async function loadItemGroupMap() {
+    try {
+      const res = await fetch('/api/analytics/item-groups');
+      const json = await res.json();
+      if (json.success) {
+        appState.itemGroupMap = json.itemGroupMap || {};
+        populateCategoryFilter('stock-category-filter', json.availableItemGroups || []);
+      }
+    } catch (e) {
+      console.warn('Gagal memuat pemetaan kategori item (mode lokal/offline?)', e);
+    }
   }
 
   // 1. Check Backend API and Load Dates History
@@ -302,6 +323,11 @@ document.addEventListener('DOMContentLoaded', () => {
       appState.searchQuery = e.target.value.toLowerCase().trim();
       filterTableRows();
     });
+
+    const categoryFilter = document.getElementById('stock-category-filter');
+    if (categoryFilter) {
+      categoryFilter.addEventListener('change', filterTableRows);
+    }
   }
 
   function onMerkChanged() {
@@ -446,11 +472,13 @@ document.addEventListener('DOMContentLoaded', () => {
       `;
     }
 
+    const itemGroup = appState.itemGroupMap[item.code];
+
     return `
       <tr data-item-code="${escapeHtml(item.code)}" data-item-name="${escapeHtml(item.name.toLowerCase())}">
         <td>
           <div style="font-weight: 600; color: var(--text-primary); white-space: normal; min-width: 220px;">${escapeHtml(item.name)}</div>
-          <div style="font-size: 11px; color: var(--text-muted);">${escapeHtml(item.code)}</div>
+          <div style="font-size: 11px; color: var(--text-muted);">${escapeHtml(item.code)}${itemGroup ? ` &bull; ${escapeHtml(itemGroup)}` : ''}</div>
         </td>
         ${cellsHtml}
         <td class="outlet-total" style="font-weight: 700; color: var(--accent-cyan); text-align: center;">${itemTotal}</td>
@@ -544,9 +572,13 @@ document.addEventListener('DOMContentLoaded', () => {
   // re-renders just the visible window against the filtered list.
   function filterTableRows() {
     const q = appState.searchQuery;
-    virtualTable.filteredItems = q
-      ? virtualTable.items.filter(item => item.code.toLowerCase().includes(q) || item.name.toLowerCase().includes(q))
-      : virtualTable.items;
+    const categoryFilter = document.getElementById('stock-category-filter')?.value || 'ALL';
+
+    virtualTable.filteredItems = virtualTable.items.filter(item => {
+      if (categoryFilter !== 'ALL' && (appState.itemGroupMap[item.code] || 'LAINNYA') !== categoryFilter) return false;
+      if (q && !item.code.toLowerCase().includes(q) && !item.name.toLowerCase().includes(q)) return false;
+      return true;
+    });
     renderVisibleRows(true);
   }
 
@@ -1295,8 +1327,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const badge = document.getElementById('badge-transfer-count');
       if (badge) badge.textContent = json.count || 0;
 
-      // Populate merk filter
+      // Populate merk & category filters
       populateRebalanceMerkFilter(rebalanceRecommendations);
+      populateCategoryFilter('rebalance-category-filter', json.availableItemGroups);
 
       // Render table & KPI
       renderRebalanceTable();
@@ -1328,11 +1361,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const urgencyFilter = document.getElementById('rebalance-urgency-filter')?.value || 'ALL';
     const merkFilter = document.getElementById('rebalance-merk-filter')?.value || 'ALL';
+    const categoryFilter = document.getElementById('rebalance-category-filter')?.value || 'ALL';
     const query = (document.getElementById('rebalance-search-input')?.value || '').toLowerCase().trim();
 
     let filtered = rebalanceRecommendations.filter(r => {
       if (urgencyFilter !== 'ALL' && r.urgency !== urgencyFilter) return false;
       if (merkFilter !== 'ALL' && r.merk !== merkFilter) return false;
+      if (categoryFilter !== 'ALL' && r.itemGroup !== categoryFilter) return false;
       if (query) {
         const matchItem = (r.itemName || '').toLowerCase().includes(query) || (r.itemCode || '').includes(query);
         const matchFrom = (r.fromOutlet || '').toLowerCase().includes(query);
@@ -1375,7 +1410,10 @@ document.addEventListener('DOMContentLoaded', () => {
             <div style="font-weight: 700; color: var(--text-primary);">${escapeHtml(r.itemName)}</div>
             <div style="font-size: 11px; color: var(--text-secondary); font-family: monospace;">${r.itemCode}</div>
           </td>
-          <td><span style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(r.merk || '-')}</span></td>
+          <td>
+            <div style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(r.merk || '-')}</div>
+            <div style="font-size: 10px; color: var(--text-muted);">${escapeHtml(r.itemGroup || '-')}</div>
+          </td>
           <td><span class="transfer-from-tag">${escapeHtml(r.fromOutlet)}</span></td>
           <td><span class="transfer-to-tag">${escapeHtml(r.toOutlet)}</span></td>
           <td style="text-align: right; font-weight: 800; color: var(--accent-cyan); font-size: 14px;">${r.qty} <span style="font-size: 11px; font-weight: 500;">PCS</span></td>
@@ -1395,9 +1433,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const searchInput = document.getElementById('rebalance-search-input');
     const btnExport = document.getElementById('btn-export-rebalance');
 
+    const categoryFilter = document.getElementById('rebalance-category-filter');
+
     if (daysFilter) daysFilter.addEventListener('change', loadRebalanceData);
     if (urgencyFilter) urgencyFilter.addEventListener('change', renderRebalanceTable);
     if (merkFilter) merkFilter.addEventListener('change', renderRebalanceTable);
+    if (categoryFilter) categoryFilter.addEventListener('change', renderRebalanceTable);
     if (searchInput) searchInput.addEventListener('input', renderRebalanceTable);
 
     if (btnExport) {
@@ -1412,6 +1453,7 @@ document.addEventListener('DOMContentLoaded', () => {
           'Kode Item': r.itemCode,
           'Nama Barang': r.itemName,
           'Merk': r.merk,
+          'Kategori': r.itemGroup,
           'Dari Cabang (Sumber)': r.fromOutlet,
           'Ke Cabang (Tujuan)': r.toOutlet,
           'Qty Transfer (PCS)': r.qty,
@@ -1448,6 +1490,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (!json.success || !json.data) throw new Error(json.message || 'Gagal mengambil data ketahanan');
       coverageData = json.data;
+      populateCategoryFilter('coverage-category-filter', coverageData.availableItemGroups);
       renderCoverageTable();
     } catch (err) {
       console.error('Coverage load error:', err);
@@ -1460,10 +1503,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!tableBody || !coverageData || !coverageData.items) return;
 
     const statusFilter = document.getElementById('coverage-status-filter')?.value || 'ALL';
+    const categoryFilter = document.getElementById('coverage-category-filter')?.value || 'ALL';
     const query = (document.getElementById('coverage-search-input')?.value || '').toLowerCase().trim();
 
     const items = Object.values(coverageData.items).filter(item => {
       if (query && !item.name.toLowerCase().includes(query) && !item.code.includes(query)) return false;
+      if (categoryFilter !== 'ALL' && item.itemGroup !== categoryFilter) return false;
 
       if (statusFilter !== 'ALL') {
         const hasMatchingOutlet = Object.values(item.outlets).some(o => o.status === statusFilter);
@@ -1484,11 +1529,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
       Object.entries(item.outlets).forEach(([outlet, out]) => {
         if (out.status === 'OUT_OF_STOCK') {
-          criticalOutlets.push(`<span class="status-badge badge-critical">${outlet}: KOSONG (${out.ads}/hr)</span>`);
+          criticalOutlets.push(`<span class="status-badge badge-critical">${escapeHtml(outlet)}: KOSONG (${out.ads}/hr)</span>`);
         } else if (out.status === 'CRITICAL') {
-          criticalOutlets.push(`<span class="status-badge badge-critical">${outlet}: ${out.doc} hr</span>`);
+          criticalOutlets.push(`<span class="status-badge badge-critical">${escapeHtml(outlet)}: ${out.doc} hr</span>`);
         } else if (out.status === 'OVERSTOCK') {
-          overstockOutlets.push(`<span class="status-badge badge-overstock">${outlet}: ${out.doc} hr (${out.stock} pcs)</span>`);
+          overstockOutlets.push(`<span class="status-badge badge-overstock">${escapeHtml(outlet)}: ${out.doc} hr (${out.stock} pcs)</span>`);
         }
       });
 
@@ -1506,9 +1551,12 @@ document.addEventListener('DOMContentLoaded', () => {
       rowsHtml += `
         <tr>
           <td style="text-align: center; color: var(--text-muted);">${idx + 1}</td>
-          <td style="font-family: monospace; font-size: 12px;">${item.code}</td>
+          <td style="font-family: monospace; font-size: 12px;">${escapeHtml(item.code)}</td>
           <td style="font-weight: 700;">${escapeHtml(item.name)}</td>
-          <td><span style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(item.merk || '-')}</span></td>
+          <td>
+            <div style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(item.merk || '-')}</div>
+            <div style="font-size: 10px; color: var(--text-muted);">${escapeHtml(item.itemGroup || '-')}</div>
+          </td>
           <td style="text-align: right; font-weight: 700;">${item.totalStock.toLocaleString('id-ID')}</td>
           <td style="text-align: right; color: var(--status-warning); font-weight: 700;">${item.totalADS}</td>
           <td style="text-align: right; font-weight: 800; color: ${item.globalDoC < 3 ? 'var(--status-danger)' : 'var(--status-success)'};">${docDisplay}</td>
@@ -1526,8 +1574,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const searchInput = document.getElementById('coverage-search-input');
     const btnExport = document.getElementById('btn-export-coverage');
 
+    const categoryFilter = document.getElementById('coverage-category-filter');
+
     if (daysFilter) daysFilter.addEventListener('change', loadCoverageData);
     if (statusFilter) statusFilter.addEventListener('change', renderCoverageTable);
+    if (categoryFilter) categoryFilter.addEventListener('change', renderCoverageTable);
     if (searchInput) searchInput.addEventListener('input', renderCoverageTable);
 
     if (btnExport) {
@@ -1542,6 +1593,7 @@ document.addEventListener('DOMContentLoaded', () => {
           'Kode Item': item.code,
           'Nama Barang': item.name,
           'Merk': item.merk,
+          'Kategori': item.itemGroup,
           'Total Stok (PCS)': item.totalStock,
           'Penjualan Harian (ADS)': item.totalADS,
           'Ketahanan Jaringan (Hari)': item.globalDoC >= 999 ? 'Tidak Ada Penjualan' : item.globalDoC
@@ -1582,6 +1634,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (badge) badge.textContent = json.count || 0;
 
       populatePOMerkFilter(poSuggestions);
+      populateCategoryFilter('po-category-filter', json.availableItemGroups);
       renderPOTable();
     } catch (err) {
       console.error('PO load error:', err);
@@ -1610,10 +1663,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!tableBody) return;
 
     const merkFilter = document.getElementById('po-merk-filter')?.value || 'ALL';
+    const categoryFilter = document.getElementById('po-category-filter')?.value || 'ALL';
     const query = (document.getElementById('po-search-input')?.value || '').toLowerCase().trim();
 
     const filtered = poSuggestions.filter(s => {
       if (merkFilter !== 'ALL' && s.merk !== merkFilter) return false;
+      if (categoryFilter !== 'ALL' && s.itemGroup !== categoryFilter) return false;
       if (query && !s.itemName.toLowerCase().includes(query) && !s.itemCode.includes(query)) return false;
       return true;
     });
@@ -1643,9 +1698,12 @@ document.addEventListener('DOMContentLoaded', () => {
       rowsHtml += `
         <tr>
           <td style="text-align: center; color: var(--text-muted);">${idx + 1}</td>
-          <td style="font-family: monospace; font-size: 12px;">${s.itemCode}</td>
+          <td style="font-family: monospace; font-size: 12px;">${escapeHtml(s.itemCode)}</td>
           <td style="font-weight: 700;">${escapeHtml(s.itemName)}</td>
-          <td><span style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(s.merk || '-')}</span></td>
+          <td>
+            <div style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(s.merk || '-')}</div>
+            <div style="font-size: 10px; color: var(--text-muted);">${escapeHtml(s.itemGroup || '-')}</div>
+          </td>
           <td style="text-align: right; font-weight: 700;">${s.globalStock}</td>
           <td style="text-align: right; color: var(--status-warning); font-weight: 700;">${s.globalADS}</td>
           <td style="text-align: right; font-weight: 700; color: ${s.daysLeft < 3 ? 'var(--status-danger)' : 'var(--text-primary)'};">${s.daysLeft} hr</td>
@@ -1665,9 +1723,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const searchInput = document.getElementById('po-search-input');
     const btnExport = document.getElementById('btn-export-po');
 
+    const categoryFilter = document.getElementById('po-category-filter');
+
     if (daysFilter) daysFilter.addEventListener('change', loadPOData);
 
     if (merkFilter) merkFilter.addEventListener('change', renderPOTable);
+    if (categoryFilter) categoryFilter.addEventListener('change', renderPOTable);
     if (searchInput) searchInput.addEventListener('input', renderPOTable);
 
     if (btnExport) {
@@ -1682,6 +1743,7 @@ document.addEventListener('DOMContentLoaded', () => {
           'Kode Item': s.itemCode,
           'Nama Barang': s.itemName,
           'Merk': s.merk,
+          'Kategori': s.itemGroup,
           'Stok Jaringan Saat Ini': s.globalStock,
           'Penjualan/Hari (ADS)': s.globalADS,
           'Sisa Ketahanan (Hari)': s.daysLeft,
