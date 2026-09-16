@@ -512,7 +512,8 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && pathname === '/api/analytics/outlet-performance') {
     try {
       const days = Math.min(180, Math.max(1, parseInt(parsedUrl.searchParams.get('days') || '30', 10)));
-      const data = db.getOutletPerformance(days);
+      const itemGroup = parsedUrl.searchParams.get('itemGroup') || null;
+      const data = db.getOutletPerformance(days, itemGroup);
       return sendJson(res, 200, { success: true, data });
     } catch (err) {
       return sendJson(res, 500, { success: false, message: err.message });
@@ -534,7 +535,8 @@ const server = http.createServer((req, res) => {
       const allowedBuckets = ['day', '3day', 'week', '2week', 'month'];
       let bucketType = parsedUrl.searchParams.get('bucket') || 'week';
       if (!allowedBuckets.includes(bucketType)) bucketType = 'week';
-      const data = db.getTrendAnalysis(bucketType);
+      const itemGroup = parsedUrl.searchParams.get('itemGroup') || null;
+      const data = db.getTrendAnalysis(bucketType, itemGroup);
       return sendJson(res, 200, { success: true, data });
     } catch (err) {
       return sendJson(res, 500, { success: false, message: err.message });

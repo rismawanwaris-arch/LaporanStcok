@@ -579,13 +579,38 @@ class StockDatabase {
    * @param {number} [days=30] - How many of the most recent daily stock reports to include
    * @param {number} [chronicThresholdPct=20] - Min avg stockout rate (%) to flag an item as "chronic"
    */
+  /**
+   * Maps item_code -> item_group ("VOUCHER", "PETSHOP", "ACC CAMPURAN NEW",
+   * etc.) from sales history. Only sales_records carries this category field
+   * (stock/purchase imports don't), so items never sold have no known group.
+   */
+  getItemGroupByCode() {
+    const rows = this.db.prepare(`
+      SELECT item_code, item_group FROM sales_records
+      WHERE item_group IS NOT NULL AND item_group != ''
+      GROUP BY item_code
+    `).all();
+    const map = {};
+    rows.forEach(r => { map[r.item_code] = r.item_group; });
+    return map;
+  }
+
+  /** Distinct item_group values seen in sales history, for populating category filters. */
+  getDistinctItemGroups() {
+    return this.db.prepare(`
+      SELECT DISTINCT item_group FROM sales_records
+      WHERE item_group IS NOT NULL AND item_group != ''
+      ORDER BY item_group
+    `).all().map(r => r.item_group);
+  }
+
   getStockoutHistory(days = 30, chronicThresholdPct = 20) {
     const reportDates = this.db.prepare(`
       SELECT report_date FROM reports ORDER BY report_date DESC LIMIT ?
     `).all(days).map(r => r.report_date).sort();
 
     if (reportDates.length === 0) {
-      return { days, reportDatesCount: 0, dateRange: null, chronicThresholdPct, items: [], outletSummary: [] };
+      return { days, reportDatesCount: 0, dateRange: null, chronicThresholdPct, items: [], outletSummary: [], availableItemGroups: this.getDistinctItemGroups() };
     }
 
     const stockPlaceholders = reportDates.map(() => '?').join(',');
@@ -615,6 +640,7 @@ class StockDatabase {
       `).all(...salesDates);
     }
 
+    const itemGroupMap = this.getItemGroupByCode();
     const totalWindowDays = reportDates.length;
     const itemMap = {}; // item_code -> { name, merk, outlets: { outlet -> Set(reportDatesInStock) }, totalSold }
 
@@ -670,6 +696,7 @@ class StockDatabase {
         code: item.code,
         name: item.name,
         merk: item.merk,
+        itemGroup: itemGroupMap[item.code] || 'LAINNYA',
         totalSold: item.totalSold,
         ads,
         avgStockoutRate,
@@ -692,7 +719,8 @@ class StockDatabase {
       dateRange: { first: reportDates[0], latest: reportDates[reportDates.length - 1] },
       chronicThresholdPct,
       items,
-      outletSummary
+      outletSummary,
+      availableItemGroups: this.getDistinctItemGroups()
     };
   }
 
@@ -707,9 +735,10 @@ class StockDatabase {
   getABCAgingAnalysis(days = 90) {
     const latest = this.db.prepare(`SELECT report_date FROM reports ORDER BY report_date DESC LIMIT 1`).get();
     if (!latest) {
-      return { days, latestStockDate: null, items: [] };
+      return { days, latestStockDate: null, items: [], availableItemGroups: this.getDistinctItemGroups() };
     }
     const latestStockDate = latest.report_date;
+    const itemGroupMap = this.getItemGroupByCode();
 
     const currentStockRows = this.db.prepare(`
       SELECT merk, item_code, item_name, SUM(stock) as total_stock
@@ -789,6 +818,7 @@ class StockDatabase {
         code: r.item_code,
         name: r.item_name,
         merk: r.merk,
+        itemGroup: itemGroupMap[r.item_code] || 'LAINNYA',
         currentStock: r.total_stock,
         abcClass: abcClassMap[r.item_code] || '-',
         revenueInWindow: Math.round(revenueInWindow),
@@ -808,7 +838,7 @@ class StockDatabase {
       return b.estimatedValue - a.estimatedValue;
     });
 
-    return { days, latestStockDate, totalRevenue: Math.round(totalRevenue), items };
+    return { days, latestStockDate, totalRevenue: Math.round(totalRevenue), items, availableItemGroups: this.getDistinctItemGroups() };
   }
 
   /**
@@ -817,8 +847,11 @@ class StockDatabase {
    * the same window — surfaces both top performers and branches needing help.
    *
    * @param {number} [days=30]
+   * @param {string} [itemGroup] - Optional category filter (e.g. "VOUCHER", "PETSHOP").
+   *   Only applies to the sales-side numbers — stock and stockout rate aren't
+   *   category-aware since that field only exists on sales_records.
    */
-  getOutletPerformance(days = 30) {
+  getOutletPerformance(days = 30, itemGroup = null) {
     const salesDates = this.db.prepare(`
       SELECT DISTINCT transaction_date FROM sales_records ORDER BY transaction_date DESC LIMIT ?
     `).all(days).map(r => r.transaction_date);
@@ -826,13 +859,15 @@ class StockDatabase {
     let salesRows = [];
     if (salesDates.length > 0) {
       const placeholders = salesDates.map(() => '?').join(',');
+      const groupClause = itemGroup ? 'AND item_group = ?' : '';
+      const params = itemGroup ? [...salesDates, itemGroup] : salesDates;
       salesRows = this.db.prepare(`
         SELECT outlet, SUM(subtotal) as revenue, SUM(profit_loss) as profit, SUM(qty) as qty,
                COUNT(DISTINCT transaction_no) as tx_count
         FROM sales_records
-        WHERE transaction_date IN (${placeholders})
+        WHERE transaction_date IN (${placeholders}) ${groupClause}
         GROUP BY outlet
-      `).all(...salesDates);
+      `).all(...params);
     }
 
     const latest = this.db.prepare(`SELECT report_date FROM reports ORDER BY report_date DESC LIMIT 1`).get();
@@ -912,7 +947,15 @@ class StockDatabase {
       o.needsAttention = o.rank > medianRank && o.stockoutRate > avgStockoutRate;
     });
 
-    return { days, salesDatesCount: salesDates.length, totalNetworkRevenue: Math.round(totalNetworkRevenue), avgStockoutRate: +avgStockoutRate.toFixed(1), outlets };
+    return {
+      days,
+      itemGroup: itemGroup || null,
+      salesDatesCount: salesDates.length,
+      totalNetworkRevenue: Math.round(totalNetworkRevenue),
+      avgStockoutRate: +avgStockoutRate.toFixed(1),
+      outlets,
+      availableItemGroups: this.getDistinctItemGroups()
+    };
   }
 
   /**
@@ -1013,14 +1056,19 @@ class StockDatabase {
    * visible — e.g. "is this week's revenue up or down from last week".
    *
    * @param {string} [bucketType='week'] - 'day' | '3day' | 'week' | '2week' | 'month'
+   * @param {string} [itemGroup] - Optional category filter (e.g. "VOUCHER"). Only
+   *   applies to the sales side — purchase_records has no category field, so
+   *   purchase totals are omitted entirely (not just left unfiltered, which
+   *   would misleadingly compare "this category's sales" to "all purchases").
    */
-  getTrendAnalysis(bucketType = 'week') {
+  getTrendAnalysis(bucketType = 'week', itemGroup = null) {
+    const salesGroupClause = itemGroup ? 'WHERE item_group = ?' : '';
     const salesByDay = this.db.prepare(`
       SELECT transaction_date as date, SUM(subtotal) as revenue, SUM(qty) as qty, SUM(profit_loss) as profit
-      FROM sales_records GROUP BY transaction_date
-    `).all();
+      FROM sales_records ${salesGroupClause} GROUP BY transaction_date
+    `).all(...(itemGroup ? [itemGroup] : []));
 
-    const purchByDay = this.db.prepare(`
+    const purchByDay = itemGroup ? [] : this.db.prepare(`
       SELECT purchase_date as date, SUM(subtotal) as amount, SUM(qty) as qty
       FROM purchase_records GROUP BY purchase_date
     `).all();
@@ -1044,7 +1092,7 @@ class StockDatabase {
 
     const allDates = Object.keys(dayMap).sort();
     if (allDates.length === 0) {
-      return { bucketType, buckets: [] };
+      return { bucketType, itemGroup: itemGroup || null, purchaseDataAvailable: !itemGroup, buckets: [], availableItemGroups: this.getDistinctItemGroups() };
     }
 
     function newBucket(startDate) {
@@ -1102,7 +1150,14 @@ class StockDatabase {
       b.purchAmount = Math.round(b.purchAmount);
     });
 
-    return { bucketType, dateRange: { first: allDates[0], last: allDates[allDates.length - 1] }, buckets };
+    return {
+      bucketType,
+      itemGroup: itemGroup || null,
+      purchaseDataAvailable: !itemGroup,
+      dateRange: { first: allDates[0], last: allDates[allDates.length - 1] },
+      buckets,
+      availableItemGroups: this.getDistinctItemGroups()
+    };
   }
 
   // ==========================================
