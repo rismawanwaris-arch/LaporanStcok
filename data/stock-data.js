@@ -80,9 +80,20 @@ class StockDataParser {
       'BK5 CIGER CELL': 'BK 5 CIGER',
       'BK 5 CIGER': 'BK 5 CIGER',
       'BK6': 'BK 6 PANGARITAN',
+      'BK6 PANGARITAN': 'BK 6 PANGARITAN',
       'BK 6 PANGARITAN': 'BK 6 PANGARITAN',
       'BK7': 'BK 7 NAGROG',
+      'BK7 NAGROG': 'BK 7 NAGROG',
       'BK 7 NAGROG': 'BK 7 NAGROG',
+      // Stock report uses "CL n" column headers for these branches while the
+      // sales/purchase reports spell them out as "CILENGKRANG"/"CILENGKRANG n"
+      // (see TransactionParser, which reuses this same map). Without this,
+      // joining stock+sales by outlet name treats them as 8 different branches
+      // instead of the 4 physical Cilengkrang outlets.
+      'CL 1': 'CILENGKRANG',
+      'CL 2': 'CILENGKRANG 2',
+      'CL 3': 'CILENGKRANG 3',
+      'CL 4': 'CILENGKRANG 4',
       'BUNISARI': 'BUNISARI',
       'BUNISARI CELL': 'BUNISARI',
       'CIPOREAT': 'CIPOREAT',
