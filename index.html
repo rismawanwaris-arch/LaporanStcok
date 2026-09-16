@@ -418,12 +418,12 @@
             <thead>
               <tr>
                 <th style="width: 50px; text-align: center;">No</th>
-                <th>Barang / Item</th>
-                <th>Merk</th>
-                <th>Dari Cabang (Sumber)</th>
-                <th>Ke Cabang (Tujuan)</th>
-                <th style="text-align: right;">Qty Transfer</th>
-                <th style="text-align: center;">Urgensi</th>
+                <th data-sort-key="itemName">Barang / Item</th>
+                <th data-sort-key="merk">Merk</th>
+                <th data-sort-key="fromOutlet">Dari Cabang (Sumber)</th>
+                <th data-sort-key="toOutlet">Ke Cabang (Tujuan)</th>
+                <th style="text-align: right;" data-sort-key="qty">Qty Transfer</th>
+                <th style="text-align: center;" data-sort-key="urgency">Urgensi</th>
                 <th>Alasan & Status Rekomendasi</th>
               </tr>
             </thead>
@@ -496,12 +496,12 @@
             <thead>
               <tr>
                 <th style="width: 50px; text-align: center;">No</th>
-                <th>Kode</th>
-                <th>Nama Barang</th>
-                <th>Merk</th>
-                <th style="text-align: right;">Stok Total</th>
-                <th style="text-align: right;">Penjualan/Hari (ADS)</th>
-                <th style="text-align: right;">DoC Jaringan</th>
+                <th data-sort-key="code">Kode</th>
+                <th data-sort-key="name">Nama Barang</th>
+                <th data-sort-key="merk">Merk</th>
+                <th style="text-align: right;" data-sort-key="totalStock">Stok Total</th>
+                <th style="text-align: right;" data-sort-key="totalADS">Penjualan/Hari (ADS)</th>
+                <th style="text-align: right;" data-sort-key="globalDoC">DoC Jaringan</th>
                 <th>Rincian Cabang Kritis / Overstock</th>
               </tr>
             </thead>
@@ -612,15 +612,15 @@
             <thead>
               <tr>
                 <th style="width: 50px; text-align: center;">No</th>
-                <th>Kode</th>
-                <th>Nama Barang</th>
-                <th>Merk</th>
-                <th style="text-align: right;">Stok Jaringan</th>
-                <th style="text-align: right;">Penjualan/Hari (ADS)</th>
-                <th style="text-align: right;">Sisa Hari (DoC)</th>
-                <th style="text-align: right;">Titik Pesan (ROP)</th>
-                <th style="text-align: right; color: var(--accent-cyan);">Saran Order (PO)</th>
-                <th style="text-align: center;">Tingkat Kebutuhan</th>
+                <th data-sort-key="itemCode">Kode</th>
+                <th data-sort-key="itemName">Nama Barang</th>
+                <th data-sort-key="merk">Merk</th>
+                <th style="text-align: right;" data-sort-key="globalStock">Stok Jaringan</th>
+                <th style="text-align: right;" data-sort-key="globalADS">Penjualan/Hari (ADS)</th>
+                <th style="text-align: right;" data-sort-key="daysLeft">Sisa Hari (DoC)</th>
+                <th style="text-align: right;" data-sort-key="reorderPoint">Titik Pesan (ROP)</th>
+                <th style="text-align: right; color: var(--accent-cyan);" data-sort-key="suggestedQty">Saran Order (PO)</th>
+                <th style="text-align: center;" data-sort-key="urgency">Tingkat Kebutuhan</th>
               </tr>
             </thead>
             <tbody id="po-table-body">
@@ -741,13 +741,13 @@
             <thead>
               <tr>
                 <th style="width: 50px; text-align: center;">No</th>
-                <th>Kode</th>
-                <th>Nama Barang</th>
-                <th>Merk</th>
-                <th style="text-align: right;">Total Terjual</th>
-                <th style="text-align: right;">Penjualan/Hari (ADS)</th>
-                <th style="text-align: right;">Rata² Kekosongan</th>
-                <th>Cabang Terparah</th>
+                <th data-sort-key="code">Kode</th>
+                <th data-sort-key="name">Nama Barang</th>
+                <th data-sort-key="merk">Merk</th>
+                <th style="text-align: right;" data-sort-key="totalSold">Total Terjual</th>
+                <th style="text-align: right;" data-sort-key="ads">Penjualan/Hari (ADS)</th>
+                <th style="text-align: right;" data-sort-key="avgStockoutRate">Rata² Kekosongan</th>
+                <th data-sort-key="worstOutlet">Cabang Terparah</th>
                 <th style="text-align: center;">Status</th>
                 <th>Rincian Cabang Sering Kosong</th>
               </tr>
@@ -872,15 +872,15 @@
             <thead>
               <tr>
                 <th style="width: 50px; text-align: center;">No</th>
-                <th>Kode</th>
-                <th>Nama Barang</th>
-                <th>Merk</th>
-                <th style="text-align: right;">Stok Saat Ini</th>
-                <th style="text-align: center;">Kelas ABC</th>
-                <th style="text-align: right;">Kontribusi Omzet</th>
-                <th>Terakhir Terjual</th>
-                <th style="text-align: right;">Umur Stok</th>
-                <th style="text-align: right;">Est. Nilai Tertahan</th>
+                <th data-sort-key="code">Kode</th>
+                <th data-sort-key="name">Nama Barang</th>
+                <th data-sort-key="merk">Merk</th>
+                <th style="text-align: right;" data-sort-key="currentStock">Stok Saat Ini</th>
+                <th style="text-align: center;" data-sort-key="abcClass">Kelas ABC</th>
+                <th style="text-align: right;" data-sort-key="revenueInWindow">Kontribusi Omzet</th>
+                <th data-sort-key="lastSaleDate">Terakhir Terjual</th>
+                <th style="text-align: right;" data-sort-key="agingDays">Umur Stok</th>
+                <th style="text-align: right;" data-sort-key="estimatedValue">Est. Nilai Tertahan</th>
               </tr>
             </thead>
             <tbody id="abc-table-body">
@@ -988,16 +988,16 @@
           <table class="analytics-table" id="outlet-table">
             <thead>
               <tr>
-                <th style="width: 50px; text-align: center;">Rank</th>
-                <th>Cabang</th>
-                <th style="text-align: right;">Omzet</th>
-                <th style="text-align: right;">Profit</th>
-                <th style="text-align: right;">Qty Terjual</th>
-                <th style="text-align: right;">Transaksi</th>
-                <th style="text-align: right;">Stok Saat Ini</th>
-                <th style="text-align: right;">Kontribusi Omzet</th>
-                <th style="text-align: right;">Tingkat Kekosongan</th>
-                <th style="text-align: center;">Status</th>
+                <th style="width: 50px; text-align: center;" data-sort-key="rank">Rank</th>
+                <th data-sort-key="outlet">Cabang</th>
+                <th style="text-align: right;" data-sort-key="revenue">Omzet</th>
+                <th style="text-align: right;" data-sort-key="profit">Profit</th>
+                <th style="text-align: right;" data-sort-key="qty">Qty Terjual</th>
+                <th style="text-align: right;" data-sort-key="txCount">Transaksi</th>
+                <th style="text-align: right;" data-sort-key="currentStock">Stok Saat Ini</th>
+                <th style="text-align: right;" data-sort-key="revenueSharePct">Kontribusi Omzet</th>
+                <th style="text-align: right;" data-sort-key="stockoutRate">Tingkat Kekosongan</th>
+                <th style="text-align: center;" data-sort-key="needsAttention">Status</th>
               </tr>
             </thead>
             <tbody id="outlet-table-body">
@@ -1093,13 +1093,13 @@
             <thead>
               <tr>
                 <th style="width: 50px; text-align: center;">No</th>
-                <th>Vendor</th>
-                <th style="text-align: right;">Item Disuplai</th>
-                <th style="text-align: right;">Total Qty Dibeli</th>
-                <th style="text-align: right;">Total Belanja</th>
-                <th style="text-align: right;">Jumlah Invoice</th>
-                <th>Terakhir Beli</th>
-                <th style="text-align: right;">Item Termurah</th>
+                <th data-sort-key="vendor">Vendor</th>
+                <th style="text-align: right;" data-sort-key="itemsSuppliedCount">Item Disuplai</th>
+                <th style="text-align: right;" data-sort-key="totalQty">Total Qty Dibeli</th>
+                <th style="text-align: right;" data-sort-key="totalSpend">Total Belanja</th>
+                <th style="text-align: right;" data-sort-key="invoiceCount">Jumlah Invoice</th>
+                <th data-sort-key="lastPurchaseDate">Terakhir Beli</th>
+                <th style="text-align: right;" data-sort-key="cheapestOnCount">Item Termurah</th>
               </tr>
             </thead>
             <tbody id="vendor-table-body">
@@ -1121,13 +1121,13 @@
           <table class="analytics-table" id="vendor-pricegap-table">
             <thead>
               <tr>
-                <th>Kode</th>
-                <th>Nama Barang</th>
-                <th>Vendor Termurah</th>
-                <th style="text-align: right;">Harga Termurah</th>
-                <th>Vendor Termahal</th>
-                <th style="text-align: right;">Harga Termahal</th>
-                <th style="text-align: right;">Selisih</th>
+                <th data-sort-key="itemCode">Kode</th>
+                <th data-sort-key="itemName">Nama Barang</th>
+                <th data-sort-key="cheapestVendor">Vendor Termurah</th>
+                <th style="text-align: right;" data-sort-key="cheapestPrice">Harga Termurah</th>
+                <th data-sort-key="priciestVendor">Vendor Termahal</th>
+                <th style="text-align: right;" data-sort-key="priciestPrice">Harga Termahal</th>
+                <th style="text-align: right;" data-sort-key="spreadPct">Selisih</th>
               </tr>
             </thead>
             <tbody id="vendor-pricegap-table-body">
@@ -1237,13 +1237,13 @@
           <table class="analytics-table" id="trend-table">
             <thead>
               <tr>
-                <th>Periode</th>
-                <th style="text-align: right;">Hari Tercatat</th>
-                <th style="text-align: right;">Omzet Penjualan</th>
-                <th style="text-align: right;">Qty Terjual</th>
-                <th style="text-align: right;">Profit</th>
-                <th style="text-align: right;">Total Pembelian</th>
-                <th style="text-align: right;">Qty Dibeli</th>
+                <th data-sort-key="startDate">Periode</th>
+                <th style="text-align: right;" data-sort-key="days">Hari Tercatat</th>
+                <th style="text-align: right;" data-sort-key="revenue">Omzet Penjualan</th>
+                <th style="text-align: right;" data-sort-key="qty">Qty Terjual</th>
+                <th style="text-align: right;" data-sort-key="profit">Profit</th>
+                <th style="text-align: right;" data-sort-key="purchAmount">Total Pembelian</th>
+                <th style="text-align: right;" data-sort-key="purchQty">Qty Dibeli</th>
               </tr>
             </thead>
             <tbody id="trend-table-body">
