@@ -1414,6 +1414,37 @@ footer a:hover {
   background: var(--table-hover-highlight-bg);
 }
 
+/* Click-to-sort table headers (shared by every analytics table and the main
+   stock matrix's "Barang / Item" / "TOTAL (PCS)" columns). */
+th.sortable-col {
+  cursor: pointer;
+  user-select: none;
+}
+
+th.sortable-col:hover {
+  color: var(--accent-cyan);
+}
+
+th.sortable-col::after {
+  content: '\2195';
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 10px;
+  opacity: 0.35;
+}
+
+th.sortable-col.sort-asc::after {
+  content: '\2191';
+  opacity: 1;
+  color: var(--accent-cyan);
+}
+
+th.sortable-col.sort-desc::after {
+  content: '\2193';
+  opacity: 1;
+  color: var(--accent-cyan);
+}
+
 .transfer-from-tag {
   background: rgba(59, 130, 246, 0.15);
   color: #93c5fd;

@@ -22,6 +22,12 @@ document.addEventListener('DOMContentLoaded', () => {
   // buffer of extra rows is rendered above/below the viewport to absorb it.
   const VT_ROW_HEIGHT = 48;
   const VT_BUFFER_ROWS = 8;
+
+  // Column-sort state for every table (tableBodyId -> { key, dir }); see
+  // applyColumnSort/initSortableTable below. Declared here (ahead of init())
+  // since init() synchronously wires each tab's sortable headers.
+  const columnSortState = {};
+
   let virtualTable = {
     items: [],
     filteredItems: [],
@@ -186,6 +192,62 @@ document.addEventListener('DOMContentLoaded', () => {
       filter.appendChild(opt);
     });
     if (groups.includes(currentVal)) filter.value = currentVal;
+  }
+
+  // ============================================================
+  // GENERIC COLUMN SORT (click a table header to sort by that column)
+  // Shared by every analytics table: each render*Table() function sorts its
+  // filtered array with applyColumnSort() right before building row HTML,
+  // and each setup*Controls() wires the header clicks once with
+  // initSortableTable() (headers are static HTML, so this only runs once
+  // per tab — except the virtualized main stock table, whose headers are
+  // rebuilt on every render, so it re-wires itself each time instead).
+  // ============================================================
+  function applyColumnSort(rows, tableBodyId, accessor) {
+    const state = columnSortState[tableBodyId];
+    if (!state || !state.key) return rows;
+    const dir = state.dir === 'desc' ? -1 : 1;
+    const getValue = accessor || ((row, key) => row[key]);
+    return [...rows].sort((a, b) => {
+      let va = getValue(a, state.key);
+      let vb = getValue(b, state.key);
+      if (va === null || va === undefined) va = typeof vb === 'number' ? -Infinity : '';
+      if (vb === null || vb === undefined) vb = typeof va === 'number' ? -Infinity : '';
+      if (typeof va === 'string') va = va.toLowerCase();
+      if (typeof vb === 'string') vb = vb.toLowerCase();
+      if (va < vb) return -1 * dir;
+      if (va > vb) return 1 * dir;
+      return 0;
+    });
+  }
+
+  function initSortableTable(tableBodyId, onSortChange) {
+    const tbody = document.getElementById(tableBodyId);
+    const table = tbody ? tbody.closest('table') : null;
+    const headers = table ? Array.from(table.querySelectorAll('thead th[data-sort-key]')) : [];
+    if (headers.length === 0) return;
+
+    if (!columnSortState[tableBodyId]) columnSortState[tableBodyId] = { key: null, dir: 'asc' };
+    const state = columnSortState[tableBodyId];
+
+    headers.forEach(th => {
+      th.classList.add('sortable-col');
+      th.classList.remove('sort-asc', 'sort-desc');
+      if (state.key === th.dataset.sortKey) th.classList.add(state.dir === 'asc' ? 'sort-asc' : 'sort-desc');
+
+      th.addEventListener('click', () => {
+        const key = th.dataset.sortKey;
+        if (state.key === key) {
+          state.dir = state.dir === 'asc' ? 'desc' : 'asc';
+        } else {
+          state.key = key;
+          state.dir = 'asc';
+        }
+        headers.forEach(h => h.classList.remove('sort-asc', 'sort-desc'));
+        th.classList.add(state.dir === 'asc' ? 'sort-asc' : 'sort-desc');
+        onSortChange();
+      });
+    });
   }
 
   async function loadStockByDate(reportDate) {
@@ -396,7 +458,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const items = Object.values(merkData.items);
 
     // Render Table Headers (Columns = Outlets)
-    let headerHtml = `<th class="non-draggable">Barang / Item</th>`;
+    // "Barang / Item" and "TOTAL (PCS)" are click-to-sort (data-sort-key); the
+    // per-outlet columns stay drag-only (see OutletSorter below) since a click
+    // handler on the same cell used for drag-and-drop would fight the drag
+    // gesture.
+    let headerHtml = `<th class="non-draggable sortable-col" data-sort-key="name">Barang / Item</th>`;
 
     outlets.forEach(outlet => {
       headerHtml += `
@@ -410,8 +476,9 @@ document.addEventListener('DOMContentLoaded', () => {
         </th>
       `;
     });
-    headerHtml += `<th class="non-draggable" style="text-align: center;">TOTAL (PCS)</th>`;
+    headerHtml += `<th class="non-draggable sortable-col" style="text-align: center;" data-sort-key="total">TOTAL (PCS)</th>`;
     tableHeaders.innerHTML = headerHtml;
+    initSortableTable('stock-table-body', filterTableRows);
 
     // Outlet/grand totals only need one numeric pass over the full item list
     // (cheap — no HTML string building) and stay fixed regardless of scroll
@@ -574,11 +641,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const q = appState.searchQuery;
     const categoryFilter = document.getElementById('stock-category-filter')?.value || 'ALL';
 
-    virtualTable.filteredItems = virtualTable.items.filter(item => {
+    let filtered = virtualTable.items.filter(item => {
       if (categoryFilter !== 'ALL' && (appState.itemGroupMap[item.code] || 'LAINNYA') !== categoryFilter) return false;
       if (q && !item.code.toLowerCase().includes(q) && !item.name.toLowerCase().includes(q)) return false;
       return true;
     });
+
+    filtered = applyColumnSort(filtered, 'stock-table-body', (item, key) => {
+      if (key === 'total') {
+        const outlets = virtualTable.outlets || [];
+        let total = 0;
+        for (let i = 0; i < outlets.length; i++) total += item.stocks[outlets[i]] || 0;
+        return total;
+      }
+      return item[key];
+    });
+
+    virtualTable.filteredItems = filtered;
     renderVisibleRows(true);
   }
 
@@ -1377,6 +1456,8 @@ document.addEventListener('DOMContentLoaded', () => {
       return true;
     });
 
+    filtered = applyColumnSort(filtered, 'rebalance-table-body');
+
     // Update KPI cards
     const totalQty = filtered.reduce((sum, r) => sum + (r.qty || 0), 0);
     const targetOutlets = new Set(filtered.map(r => r.toOutlet));
@@ -1434,6 +1515,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnExport = document.getElementById('btn-export-rebalance');
 
     const categoryFilter = document.getElementById('rebalance-category-filter');
+
+    initSortableTable('rebalance-table-body', renderRebalanceTable);
 
     if (daysFilter) daysFilter.addEventListener('change', loadRebalanceData);
     if (urgencyFilter) urgencyFilter.addEventListener('change', renderRebalanceTable);
@@ -1506,7 +1589,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const categoryFilter = document.getElementById('coverage-category-filter')?.value || 'ALL';
     const query = (document.getElementById('coverage-search-input')?.value || '').toLowerCase().trim();
 
-    const items = Object.values(coverageData.items).filter(item => {
+    let items = Object.values(coverageData.items).filter(item => {
       if (query && !item.name.toLowerCase().includes(query) && !item.code.includes(query)) return false;
       if (categoryFilter !== 'ALL' && item.itemGroup !== categoryFilter) return false;
 
@@ -1516,6 +1599,8 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       return true;
     });
+
+    items = applyColumnSort(items, 'coverage-table-body');
 
     if (items.length === 0) {
       tableBody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);">Tidak ada data barang yang sesuai filter ketahanan.</td></tr>`;
@@ -1575,6 +1660,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnExport = document.getElementById('btn-export-coverage');
 
     const categoryFilter = document.getElementById('coverage-category-filter');
+
+    initSortableTable('coverage-table-body', renderCoverageTable);
 
     if (daysFilter) daysFilter.addEventListener('change', loadCoverageData);
     if (statusFilter) statusFilter.addEventListener('change', renderCoverageTable);
@@ -1666,12 +1753,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const categoryFilter = document.getElementById('po-category-filter')?.value || 'ALL';
     const query = (document.getElementById('po-search-input')?.value || '').toLowerCase().trim();
 
-    const filtered = poSuggestions.filter(s => {
+    let filtered = poSuggestions.filter(s => {
       if (merkFilter !== 'ALL' && s.merk !== merkFilter) return false;
       if (categoryFilter !== 'ALL' && s.itemGroup !== categoryFilter) return false;
       if (query && !s.itemName.toLowerCase().includes(query) && !s.itemCode.includes(query)) return false;
       return true;
     });
+
+    filtered = applyColumnSort(filtered, 'po-table-body');
 
     const totalOrderPcs = filtered.reduce((sum, s) => sum + (s.suggestedQty || 0), 0);
     const urgentCount = filtered.filter(s => s.urgency === 'HIGH').length;
@@ -1724,6 +1813,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnExport = document.getElementById('btn-export-po');
 
     const categoryFilter = document.getElementById('po-category-filter');
+
+    initSortableTable('po-table-body', renderPOTable);
 
     if (daysFilter) daysFilter.addEventListener('change', loadPOData);
 
@@ -1846,13 +1937,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const categoryFilter = document.getElementById('stockout-category-filter')?.value || 'ALL';
     const query = (document.getElementById('stockout-search-input')?.value || '').toLowerCase().trim();
 
-    const filtered = items.filter(item => {
+    let filtered = items.filter(item => {
       if (statusFilter !== 'ALL' && classifyStockoutStatus(item) !== statusFilter) return false;
       if (merkFilter !== 'ALL' && item.merk !== merkFilter) return false;
       if (categoryFilter !== 'ALL' && item.itemGroup !== categoryFilter) return false;
       if (query && !item.name.toLowerCase().includes(query) && !item.code.toLowerCase().includes(query)) return false;
       return true;
     });
+
+    filtered = applyColumnSort(filtered, 'stockout-table-body');
 
     if (filtered.length === 0) {
       tableBody.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 40px; color: var(--text-muted);">Tidak ada data yang sesuai filter riwayat stockout.</td></tr>`;
@@ -1905,6 +1998,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const merkFilter = document.getElementById('stockout-merk-filter');
     const searchInput = document.getElementById('stockout-search-input');
     const btnExport = document.getElementById('btn-export-stockout');
+
+    initSortableTable('stockout-table-body', renderStockoutTable);
 
     if (daysFilter) daysFilter.addEventListener('change', loadStockoutHistoryData);
     const categoryFilter = document.getElementById('stockout-category-filter');
@@ -2007,13 +2102,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const categoryFilter = document.getElementById('abc-category-filter')?.value || 'ALL';
     const query = (document.getElementById('abc-search-input')?.value || '').toLowerCase().trim();
 
-    const filtered = items.filter(item => {
+    let filtered = items.filter(item => {
       if (classFilter !== 'ALL' && item.abcClass !== classFilter) return false;
       if (agingFilter !== 'ALL' && item.agingBucket !== agingFilter) return false;
       if (categoryFilter !== 'ALL' && item.itemGroup !== categoryFilter) return false;
       if (query && !item.name.toLowerCase().includes(query) && !item.code.toLowerCase().includes(query)) return false;
       return true;
     });
+
+    filtered = applyColumnSort(filtered, 'abc-table-body');
 
     if (filtered.length === 0) {
       tableBody.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 40px; color: var(--text-muted);">Tidak ada data yang sesuai filter.</td></tr>`;
@@ -2055,6 +2152,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnExport = document.getElementById('btn-export-abc');
 
     const categoryFilter = document.getElementById('abc-category-filter');
+
+    initSortableTable('abc-table-body', renderABCTable);
 
     if (daysFilter) daysFilter.addEventListener('change', loadABCAgingData);
     if (classFilter) classFilter.addEventListener('change', renderABCTable);
@@ -2142,11 +2241,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const statusFilter = document.getElementById('outlet-status-filter')?.value || 'ALL';
     const query = (document.getElementById('outlet-search-input')?.value || '').toLowerCase().trim();
 
-    const filtered = outlets.filter(o => {
+    let filtered = outlets.filter(o => {
       if (statusFilter === 'ATTENTION' && !o.needsAttention) return false;
       if (query && !o.outlet.toLowerCase().includes(query)) return false;
       return true;
     });
+
+    filtered = applyColumnSort(filtered, 'outlet-table-body');
 
     if (filtered.length === 0) {
       tableBody.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 40px; color: var(--text-muted);">Tidak ada cabang yang sesuai filter.</td></tr>`;
@@ -2184,6 +2285,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const statusFilter = document.getElementById('outlet-status-filter');
     const searchInput = document.getElementById('outlet-search-input');
     const btnExport = document.getElementById('btn-export-outlet');
+
+    initSortableTable('outlet-table-body', renderOutletTable);
 
     if (daysFilter) daysFilter.addEventListener('change', loadOutletPerformanceData);
     if (categoryFilter) categoryFilter.addEventListener('change', loadOutletPerformanceData);
@@ -2266,7 +2369,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (statPriceGap) statPriceGap.textContent = priceGapItems.length;
 
     const query = (document.getElementById('vendor-search-input')?.value || '').toLowerCase().trim();
-    const filtered = vendors.filter(v => !query || v.vendor.toLowerCase().includes(query));
+    let filtered = vendors.filter(v => !query || v.vendor.toLowerCase().includes(query));
+    filtered = applyColumnSort(filtered, 'vendor-table-body');
 
     if (filtered.length === 0) {
       tableBody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);">Tidak ada vendor yang sesuai filter.</td></tr>`;
@@ -2294,7 +2398,7 @@ document.addEventListener('DOMContentLoaded', () => {
         gapTableBody.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 30px; color: var(--text-muted);">Tidak ada selisih harga signifikan antar vendor untuk periode ini.</td></tr>`;
       } else {
         let gapHtml = '';
-        priceGapItems.forEach(g => {
+        applyColumnSort(priceGapItems, 'vendor-pricegap-table-body').forEach(g => {
           gapHtml += `
             <tr>
               <td style="font-family: monospace; font-size: 12px;">${escapeHtml(g.itemCode)}</td>
@@ -2316,6 +2420,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const daysFilter = document.getElementById('vendor-days-filter');
     const searchInput = document.getElementById('vendor-search-input');
     const btnExport = document.getElementById('btn-export-vendor');
+
+    initSortableTable('vendor-table-body', renderVendorTable);
+    initSortableTable('vendor-pricegap-table-body', renderVendorTable);
 
     if (daysFilter) daysFilter.addEventListener('change', loadVendorAnalysisData);
     if (searchInput) searchInput.addEventListener('input', renderVendorTable);
@@ -2512,7 +2619,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const purchaseAvailable = trendData.purchaseDataAvailable !== false;
 
     // Most recent period first, easier to spot the latest trend at a glance
-    const rows = [...buckets].reverse();
+    const rows = applyColumnSort([...buckets].reverse(), 'trend-table-body');
     let rowsHtml = '';
     rows.forEach(b => {
       rowsHtml += `
@@ -2535,6 +2642,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const bucketFilter = document.getElementById('trend-bucket-filter');
     const categoryFilter = document.getElementById('trend-category-filter');
     const btnExport = document.getElementById('btn-export-trend');
+
+    initSortableTable('trend-table-body', renderTrendTable);
 
     if (bucketFilter) bucketFilter.addEventListener('change', loadTrendAnalysisData);
     if (categoryFilter) categoryFilter.addEventListener('change', loadTrendAnalysisData);
