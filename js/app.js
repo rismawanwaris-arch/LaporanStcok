@@ -175,6 +175,34 @@ document.addEventListener('DOMContentLoaded', () => {
     return ymd;
   }
 
+  // ============================================================
+  // LAZY-LOAD HEAVY LIBRARIES
+  // SheetJS (xlsx) is ~900KB — instead of a blocking <script> tag paid by
+  // every visit, it's only fetched the first time a user actually clicks an
+  // "Ekspor .../XLSX" button. Subsequent clicks reuse the already-loaded lib.
+  // ============================================================
+  const _scriptPromises = {};
+  function loadScriptOnce(url) {
+    if (!_scriptPromises[url]) {
+      _scriptPromises[url] = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = url;
+        s.async = true;
+        s.onload = resolve;
+        s.onerror = () => { delete _scriptPromises[url]; reject(new Error('Gagal memuat skrip: ' + url)); };
+        document.head.appendChild(s);
+      });
+    }
+    return _scriptPromises[url];
+  }
+
+  const XLSX_CDN_URL = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+  async function ensureXLSX() {
+    if (typeof XLSX === 'undefined') {
+      await loadScriptOnce(XLSX_CDN_URL);
+    }
+  }
+
   // Shared by every tab's "Kategori" filter (Item Group: VOUCHER/PETSHOP/ACC
   // CAMPURAN/etc.) — populates a <select> from the backend's availableItemGroups
   // list, preserving whatever the user already had selected.
@@ -873,17 +901,19 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Export Table Layout to Excel format using SheetJS (XLSX)
-    btnExportXlsx.addEventListener('click', () => {
+    btnExportXlsx.addEventListener('click', async () => {
       if (!appState.parsedData || !appState.activeMerk) {
         alert('Tidak ada data yang dapat diekspor. Pilih merk terlebih dahulu.');
         return;
       }
 
-      if (typeof XLSX === 'undefined') {
+      try {
+        await ensureXLSX();
+      } catch (e) {
         alert('Pustaka ekspor Excel gagal dimuat. Harap periksa koneksi internet Anda.');
         return;
       }
-      
+
       let merkData;
       if (appState.activeMerk === 'ALL') {
         merkData = {
@@ -1525,11 +1555,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (searchInput) searchInput.addEventListener('input', renderRebalanceTable);
 
     if (btnExport) {
-      btnExport.addEventListener('click', () => {
+      btnExport.addEventListener('click', async () => {
         if (!rebalanceRecommendations || rebalanceRecommendations.length === 0) {
           alert('Tidak ada data rekomendasi transfer untuk diekspor.');
           return;
         }
+        try { await ensureXLSX(); } catch (e) { alert('Pustaka ekspor Excel gagal dimuat. Periksa koneksi internet Anda.'); return; }
 
         const dataToExport = rebalanceRecommendations.map((r, i) => ({
           'No': i + 1,
@@ -1669,11 +1700,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (searchInput) searchInput.addEventListener('input', renderCoverageTable);
 
     if (btnExport) {
-      btnExport.addEventListener('click', () => {
+      btnExport.addEventListener('click', async () => {
         if (!coverageData || !coverageData.items) {
           alert('Tidak ada data ketahanan stok untuk diekspor.');
           return;
         }
+        try { await ensureXLSX(); } catch (e) { alert('Pustaka ekspor Excel gagal dimuat. Periksa koneksi internet Anda.'); return; }
 
         const dataToExport = Object.values(coverageData.items).map((item, i) => ({
           'No': i + 1,
@@ -1823,11 +1855,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (searchInput) searchInput.addEventListener('input', renderPOTable);
 
     if (btnExport) {
-      btnExport.addEventListener('click', () => {
+      btnExport.addEventListener('click', async () => {
         if (!poSuggestions || poSuggestions.length === 0) {
           alert('Tidak ada saran PO untuk diekspor.');
           return;
         }
+        try { await ensureXLSX(); } catch (e) { alert('Pustaka ekspor Excel gagal dimuat. Periksa koneksi internet Anda.'); return; }
 
         const dataToExport = poSuggestions.map((s, i) => ({
           'No': i + 1,
@@ -2010,11 +2043,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (searchInput) searchInput.addEventListener('input', renderStockoutTable);
 
     if (btnExport) {
-      btnExport.addEventListener('click', () => {
+      btnExport.addEventListener('click', async () => {
         if (!stockoutData || !stockoutData.items || stockoutData.items.length === 0) {
           alert('Tidak ada data riwayat stockout untuk diekspor.');
           return;
         }
+        try { await ensureXLSX(); } catch (e) { alert('Pustaka ekspor Excel gagal dimuat. Periksa koneksi internet Anda.'); return; }
 
         const dataToExport = stockoutData.items.map((item, i) => ({
           'No': i + 1,
@@ -2162,11 +2196,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (searchInput) searchInput.addEventListener('input', renderABCTable);
 
     if (btnExport) {
-      btnExport.addEventListener('click', () => {
+      btnExport.addEventListener('click', async () => {
         if (!abcAgingData || !abcAgingData.items || abcAgingData.items.length === 0) {
           alert('Tidak ada data ABC & aging untuk diekspor.');
           return;
         }
+        try { await ensureXLSX(); } catch (e) { alert('Pustaka ekspor Excel gagal dimuat. Periksa koneksi internet Anda.'); return; }
         const dataToExport = abcAgingData.items.map((item, i) => ({
           'No': i + 1,
           'Kode Item': item.code,
@@ -2294,11 +2329,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (searchInput) searchInput.addEventListener('input', renderOutletTable);
 
     if (btnExport) {
-      btnExport.addEventListener('click', () => {
+      btnExport.addEventListener('click', async () => {
         if (!outletPerfData || !outletPerfData.outlets || outletPerfData.outlets.length === 0) {
           alert('Tidak ada data performa cabang untuk diekspor.');
           return;
         }
+        try { await ensureXLSX(); } catch (e) { alert('Pustaka ekspor Excel gagal dimuat. Periksa koneksi internet Anda.'); return; }
         const dataToExport = outletPerfData.outlets.map(o => ({
           'Rank': o.rank,
           'Cabang': o.outlet,
@@ -2428,11 +2464,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (searchInput) searchInput.addEventListener('input', renderVendorTable);
 
     if (btnExport) {
-      btnExport.addEventListener('click', () => {
+      btnExport.addEventListener('click', async () => {
         if (!vendorAnalysisData || !vendorAnalysisData.vendors || vendorAnalysisData.vendors.length === 0) {
           alert('Tidak ada data vendor untuk diekspor.');
           return;
         }
+        try { await ensureXLSX(); } catch (e) { alert('Pustaka ekspor Excel gagal dimuat. Periksa koneksi internet Anda.'); return; }
         const dataToExport = vendorAnalysisData.vendors.map((v, i) => ({
           'No': i + 1,
           'Vendor': v.vendor,
@@ -2649,11 +2686,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (categoryFilter) categoryFilter.addEventListener('change', loadTrendAnalysisData);
 
     if (btnExport) {
-      btnExport.addEventListener('click', () => {
+      btnExport.addEventListener('click', async () => {
         if (!trendData || !trendData.buckets || trendData.buckets.length === 0) {
           alert('Tidak ada data tren untuk diekspor.');
           return;
         }
+        try { await ensureXLSX(); } catch (e) { alert('Pustaka ekspor Excel gagal dimuat. Periksa koneksi internet Anda.'); return; }
         const purchaseAvailable = trendData.purchaseDataAvailable !== false;
         const dataToExport = trendData.buckets.map(b => ({
           'Periode': formatTrendBucketLabel(b, trendData.bucketType),

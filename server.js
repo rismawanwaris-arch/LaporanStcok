@@ -7,6 +7,7 @@
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
+const zlib = require('zlib');
 const XLSX = require('xlsx');
 
 const StockDatabase = require('./database');
@@ -106,14 +107,91 @@ const MIME_TYPES = {
   '.ico': 'image/x-icon'
 };
 
-function sendJson(res, statusCode, data) {
-  res.writeHead(statusCode, {
+// Analytics responses can run into the hundreds of KB to a few MB (full
+// stock report JSON, 1000+ row analytics arrays); gzip on repetitive tabular
+// JSON like this routinely shrinks it 5-10x, which matters most on the
+// slower/metered networks a home-server app like this tends to run behind.
+function pickEncoding(acceptEncoding) {
+  const ae = acceptEncoding || '';
+  if (/\bbr\b/.test(ae)) return 'br';
+  if (/\bgzip\b/.test(ae)) return 'gzip';
+  return null;
+}
+
+function compressBuffer(buf, encoding) {
+  if (encoding === 'br') {
+    return zlib.brotliCompressSync(buf, {
+      params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 } // fast enough to run per-request
+    });
+  }
+  if (encoding === 'gzip') return zlib.gzipSync(buf);
+  return buf;
+}
+
+// Text-based static assets compress well and are requested repeatedly
+// (every page load); binary types (images, .xls/.xlsx, the .db backup
+// download) are skipped since they're already compressed or gain nothing.
+const COMPRESSIBLE_EXTENSIONS = new Set(['.html', '.css', '.js', '.json', '.csv', '.svg']);
+
+// Compressed static files rarely change, so compress once per (file, mtime,
+// encoding) and reuse the buffer on every subsequent request instead of
+// re-running gzip/brotli on every single page load.
+const staticCompressCache = new Map(); // `${filePath}|${encoding}` -> { mtimeMs, buf }
+
+function serveStaticFile(req, res, filePath, stats, ext, headers) {
+  const encoding = COMPRESSIBLE_EXTENSIONS.has(ext) ? pickEncoding(req.headers['accept-encoding']) : null;
+
+  if (!encoding) {
+    res.writeHead(200, headers);
+    return fs.createReadStream(filePath).pipe(res);
+  }
+
+  const cacheKey = `${filePath}|${encoding}`;
+  const cached = staticCompressCache.get(cacheKey);
+  if (cached && cached.mtimeMs === stats.mtimeMs) {
+    res.writeHead(200, { ...headers, 'Content-Encoding': encoding });
+    return res.end(cached.buf);
+  }
+
+  fs.readFile(filePath, (err, raw) => {
+    if (err) {
+      res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      return res.end('500 Internal Server Error');
+    }
+    // Static files are compressed once and cached, so a higher quality is
+    // worth it here (unlike the per-request JSON path, which stays fast).
+    const compressed = ext === '.html' || ext === '.css' || ext === '.js'
+      ? (encoding === 'br'
+        ? zlib.brotliCompressSync(raw, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 9 } })
+        : zlib.gzipSync(raw, { level: 9 }))
+      : compressBuffer(raw, encoding);
+    staticCompressCache.set(cacheKey, { mtimeMs: stats.mtimeMs, buf: compressed });
+    res.writeHead(200, { ...headers, 'Content-Encoding': encoding });
+    res.end(compressed);
+  });
+}
+
+function sendJson(req, res, statusCode, data) {
+  const bodyBuf = Buffer.from(JSON.stringify(data), 'utf8');
+  const headers = {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type'
-  });
-  res.end(JSON.stringify(data));
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Vary': 'Accept-Encoding'
+  };
+
+  // Below ~512 bytes the gzip/brotli frame overhead can exceed the savings —
+  // skip compression for tiny responses.
+  const encoding = bodyBuf.length > 512 ? pickEncoding(req.headers['accept-encoding']) : null;
+  if (encoding) {
+    headers['Content-Encoding'] = encoding;
+    res.writeHead(statusCode, headers);
+    return res.end(compressBuffer(bodyBuf, encoding));
+  }
+
+  res.writeHead(statusCode, headers);
+  res.end(bodyBuf);
 }
 
 // Helper to read JSON body safely
@@ -131,7 +209,7 @@ function readJsonBody(req, res, callback) {
       const payload = JSON.parse(body);
       callback(payload);
     } catch (err) {
-      return sendJson(res, 400, { success: false, message: 'Format JSON request tidak valid: ' + err.message });
+      return sendJson(req, res, 400, { success: false, message: 'Format JSON request tidak valid: ' + err.message });
     }
   });
 }
@@ -181,9 +259,9 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && pathname === '/api/dates') {
     try {
       const dates = db.getAllDates();
-      return sendJson(res, 200, { success: true, dates });
+      return sendJson(req, res, 200, { success: true, dates });
     } catch (err) {
-      return sendJson(res, 500, { success: false, message: err.message });
+      return sendJson(req, res, 500, { success: false, message: err.message });
     }
   }
 
@@ -191,17 +269,17 @@ const server = http.createServer((req, res) => {
     try {
       const reportDate = parsedUrl.searchParams.get('date');
       if (!reportDate) {
-        return sendJson(res, 400, { success: false, message: 'Parameter "date" wajib disertakan.' });
+        return sendJson(req, res, 400, { success: false, message: 'Parameter "date" wajib disertakan.' });
       }
 
       const report = db.getReportByDate(reportDate);
       if (!report) {
-        return sendJson(res, 404, { success: false, message: `Laporan untuk tanggal ${reportDate} tidak ditemukan.` });
+        return sendJson(req, res, 404, { success: false, message: `Laporan untuk tanggal ${reportDate} tidak ditemukan.` });
       }
 
-      return sendJson(res, 200, { success: true, report });
+      return sendJson(req, res, 200, { success: true, report });
     } catch (err) {
-      return sendJson(res, 500, { success: false, message: err.message });
+      return sendJson(req, res, 500, { success: false, message: err.message });
     }
   }
 
@@ -218,24 +296,24 @@ const server = http.createServer((req, res) => {
         }
 
         if (!textContent || typeof textContent !== 'string') {
-          return sendJson(res, 400, { success: false, message: 'Data stok CSV tidak valid.' });
+          return sendJson(req, res, 400, { success: false, message: 'Data stok CSV tidak valid.' });
         }
 
         const reportDate = customDate || extractDateFromCSV(textContent, filename);
         if (!/^\d{4}-\d{2}-\d{2}$/.test(reportDate)) {
-          return sendJson(res, 400, { success: false, message: 'Format tanggal harus YYYY-MM-DD.' });
+          return sendJson(req, res, 400, { success: false, message: 'Format tanggal harus YYYY-MM-DD.' });
         }
 
         const parsed = StockDataParser.parse(textContent);
         if (!parsed.merks || Object.keys(parsed.merks).length === 0) {
-          return sendJson(res, 400, { success: false, message: 'Format CSV stok tidak dikenali atau kosong.' });
+          return sendJson(req, res, 400, { success: false, message: 'Format CSV stok tidak dikenali atau kosong.' });
         }
 
         const overview = StockAnalytics.getOverview(parsed);
         const saved = db.saveReport(reportDate, filename || 'upload.csv', parsed, overview);
 
         console.log(`[Upload Stok] Tersimpan untuk tanggal: ${reportDate} (${filename})`);
-        return sendJson(res, 200, {
+        return sendJson(req, res, 200, {
           success: true,
           message: `Laporan stok tanggal ${reportDate} berhasil disimpan!`,
           reportDate,
@@ -243,7 +321,7 @@ const server = http.createServer((req, res) => {
         });
       } catch (err) {
         console.error('[Upload Stok Error]', err);
-        return sendJson(res, 500, { success: false, message: 'Gagal memproses file stok: ' + err.message });
+        return sendJson(req, res, 500, { success: false, message: 'Gagal memproses file stok: ' + err.message });
       }
     });
     return;
@@ -254,17 +332,17 @@ const server = http.createServer((req, res) => {
     try {
       const reportDate = parsedUrl.searchParams.get('date');
       if (!reportDate) {
-        return sendJson(res, 400, { success: false, message: 'Parameter "date" wajib disertakan.' });
+        return sendJson(req, res, 400, { success: false, message: 'Parameter "date" wajib disertakan.' });
       }
 
       const deleted = db.deleteReportByDate(reportDate);
       if (!deleted) {
-        return sendJson(res, 404, { success: false, message: `Laporan tanggal ${reportDate} tidak ditemukan.` });
+        return sendJson(req, res, 404, { success: false, message: `Laporan tanggal ${reportDate} tidak ditemukan.` });
       }
 
-      return sendJson(res, 200, { success: true, message: `Laporan tanggal ${reportDate} berhasil dihapus.` });
+      return sendJson(req, res, 200, { success: true, message: `Laporan tanggal ${reportDate} berhasil dihapus.` });
     } catch (err) {
-      return sendJson(res, 500, { success: false, message: err.message });
+      return sendJson(req, res, 500, { success: false, message: err.message });
     }
   }
 
@@ -272,9 +350,9 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && pathname === '/api/sales/batches') {
     try {
       const batches = db.getAllSalesBatches();
-      return sendJson(res, 200, { success: true, batches });
+      return sendJson(req, res, 200, { success: true, batches });
     } catch (err) {
-      return sendJson(res, 500, { success: false, message: err.message });
+      return sendJson(req, res, 500, { success: false, message: err.message });
     }
   }
 
@@ -283,7 +361,7 @@ const server = http.createServer((req, res) => {
       try {
         const buffer = getBufferFromPayload(payload);
         if (!buffer) {
-          return sendJson(res, 400, { success: false, message: 'Data berkas penjualan tidak ditemukan.' });
+          return sendJson(req, res, 400, { success: false, message: 'Data berkas penjualan tidak ditemukan.' });
         }
 
         const parsed = TransactionParser.parseSales(buffer);
@@ -291,7 +369,7 @@ const server = http.createServer((req, res) => {
         const saved = db.saveSalesBatch(batchDate, payload.filename || 'sales.xls', parsed);
 
         console.log(`[Upload Penjualan] ${parsed.totalRows} baris tersimpan untuk tanggal ${batchDate}`);
-        return sendJson(res, 200, {
+        return sendJson(req, res, 200, {
           success: true,
           message: `Laporan penjualan tanggal ${batchDate} (${parsed.totalRows} transaksi) berhasil disimpan!`,
           batchDate,
@@ -299,7 +377,7 @@ const server = http.createServer((req, res) => {
         });
       } catch (err) {
         console.error('[Upload Penjualan Error]', err);
-        return sendJson(res, 500, { success: false, message: 'Gagal memproses file penjualan: ' + err.message });
+        return sendJson(req, res, 500, { success: false, message: 'Gagal memproses file penjualan: ' + err.message });
       }
     });
     return;
@@ -308,14 +386,14 @@ const server = http.createServer((req, res) => {
   if (req.method === 'DELETE' && pathname === '/api/sales') {
     try {
       const batchDate = parsedUrl.searchParams.get('date');
-      if (!batchDate) return sendJson(res, 400, { success: false, message: 'Parameter "date" wajib disertakan.' });
+      if (!batchDate) return sendJson(req, res, 400, { success: false, message: 'Parameter "date" wajib disertakan.' });
       const deleted = db.deleteSalesBatch(batchDate);
       if (!deleted) {
-        return sendJson(res, 404, { success: false, message: `Data penjualan tanggal ${batchDate} tidak ditemukan.` });
+        return sendJson(req, res, 404, { success: false, message: `Data penjualan tanggal ${batchDate} tidak ditemukan.` });
       }
-      return sendJson(res, 200, { success: true, message: `Data penjualan tanggal ${batchDate} berhasil dihapus.` });
+      return sendJson(req, res, 200, { success: true, message: `Data penjualan tanggal ${batchDate} berhasil dihapus.` });
     } catch (err) {
-      return sendJson(res, 500, { success: false, message: err.message });
+      return sendJson(req, res, 500, { success: false, message: err.message });
     }
   }
 
@@ -323,9 +401,9 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && pathname === '/api/purchases/batches') {
     try {
       const batches = db.getAllPurchaseBatches();
-      return sendJson(res, 200, { success: true, batches });
+      return sendJson(req, res, 200, { success: true, batches });
     } catch (err) {
-      return sendJson(res, 500, { success: false, message: err.message });
+      return sendJson(req, res, 500, { success: false, message: err.message });
     }
   }
 
@@ -334,7 +412,7 @@ const server = http.createServer((req, res) => {
       try {
         const buffer = getBufferFromPayload(payload);
         if (!buffer) {
-          return sendJson(res, 400, { success: false, message: 'Data berkas pembelian tidak ditemukan.' });
+          return sendJson(req, res, 400, { success: false, message: 'Data berkas pembelian tidak ditemukan.' });
         }
 
         const parsed = TransactionParser.parsePurchases(buffer);
@@ -342,7 +420,7 @@ const server = http.createServer((req, res) => {
         const saved = db.savePurchaseBatch(batchDate, payload.filename || 'purchases.xls', parsed);
 
         console.log(`[Upload Pembelian] ${parsed.totalRows} baris tersimpan untuk tanggal ${batchDate}`);
-        return sendJson(res, 200, {
+        return sendJson(req, res, 200, {
           success: true,
           message: `Laporan pembelian tanggal ${batchDate} (${parsed.totalRows} transaksi) berhasil disimpan!`,
           batchDate,
@@ -350,7 +428,7 @@ const server = http.createServer((req, res) => {
         });
       } catch (err) {
         console.error('[Upload Pembelian Error]', err);
-        return sendJson(res, 500, { success: false, message: 'Gagal memproses file pembelian: ' + err.message });
+        return sendJson(req, res, 500, { success: false, message: 'Gagal memproses file pembelian: ' + err.message });
       }
     });
     return;
@@ -359,14 +437,14 @@ const server = http.createServer((req, res) => {
   if (req.method === 'DELETE' && pathname === '/api/purchases') {
     try {
       const batchDate = parsedUrl.searchParams.get('date');
-      if (!batchDate) return sendJson(res, 400, { success: false, message: 'Parameter "date" wajib disertakan.' });
+      if (!batchDate) return sendJson(req, res, 400, { success: false, message: 'Parameter "date" wajib disertakan.' });
       const deleted = db.deletePurchaseBatch(batchDate);
       if (!deleted) {
-        return sendJson(res, 404, { success: false, message: `Data pembelian tanggal ${batchDate} tidak ditemukan.` });
+        return sendJson(req, res, 404, { success: false, message: `Data pembelian tanggal ${batchDate} tidak ditemukan.` });
       }
-      return sendJson(res, 200, { success: true, message: `Data pembelian tanggal ${batchDate} berhasil dihapus.` });
+      return sendJson(req, res, 200, { success: true, message: `Data pembelian tanggal ${batchDate} berhasil dihapus.` });
     } catch (err) {
-      return sendJson(res, 500, { success: false, message: err.message });
+      return sendJson(req, res, 500, { success: false, message: err.message });
     }
   }
 
@@ -375,7 +453,7 @@ const server = http.createServer((req, res) => {
     readJsonBody(req, res, (payload) => {
       try {
         const buffer = getBufferFromPayload(payload);
-        if (!buffer) return sendJson(res, 400, { success: false, message: 'Berkas kosong.' });
+        if (!buffer) return sendJson(req, res, 400, { success: false, message: 'Berkas kosong.' });
 
         const detectedType = TransactionParser.detectType(buffer);
 
@@ -383,7 +461,7 @@ const server = http.createServer((req, res) => {
           const parsed = TransactionParser.parseSales(buffer);
           const batchDate = payload.customDate || parsed.batchDate;
           const saved = db.saveSalesBatch(batchDate, payload.filename || 'sales.xls', parsed);
-          return sendJson(res, 200, {
+          return sendJson(req, res, 200, {
             success: true,
             type: 'sales',
             message: `Otomatis terdeteksi: Laporan Penjualan (${parsed.totalRows} transaksi) tanggal ${batchDate}!`,
@@ -395,7 +473,7 @@ const server = http.createServer((req, res) => {
           const parsed = TransactionParser.parsePurchases(buffer);
           const batchDate = payload.customDate || parsed.batchDate;
           const saved = db.savePurchaseBatch(batchDate, payload.filename || 'purchases.xls', parsed);
-          return sendJson(res, 200, {
+          return sendJson(req, res, 200, {
             success: true,
             type: 'purchases',
             message: `Otomatis terdeteksi: Laporan Pembelian (${parsed.totalRows} transaksi) tanggal ${batchDate}!`,
@@ -410,7 +488,7 @@ const server = http.createServer((req, res) => {
         if (parsed.merks && Object.keys(parsed.merks).length > 0) {
           const overview = StockAnalytics.getOverview(parsed);
           const saved = db.saveReport(reportDate, payload.filename || 'upload.csv', parsed, overview);
-          return sendJson(res, 200, {
+          return sendJson(req, res, 200, {
             success: true,
             type: 'stock',
             message: `Otomatis terdeteksi: Laporan Stok (${overview.global.totalItems} item) tanggal ${reportDate}!`,
@@ -418,10 +496,10 @@ const server = http.createServer((req, res) => {
           });
         }
 
-        return sendJson(res, 400, { success: false, message: 'Format berkas tidak dikenali sebagai Stok, Penjualan, ataupun Pembelian.' });
+        return sendJson(req, res, 400, { success: false, message: 'Format berkas tidak dikenali sebagai Stok, Penjualan, ataupun Pembelian.' });
       } catch (err) {
         console.error('[Upload Auto Error]', err);
-        return sendJson(res, 500, { success: false, message: 'Gagal memproses berkas otomatis: ' + err.message });
+        return sendJson(req, res, 500, { success: false, message: 'Gagal memproses berkas otomatis: ' + err.message });
       }
     });
     return;
@@ -433,9 +511,9 @@ const server = http.createServer((req, res) => {
       const stockDate = parsedUrl.searchParams.get('stockDate') || undefined;
       const days = parseInt(parsedUrl.searchParams.get('days') || '1', 10);
       const data = db.getIntegratedData(stockDate, days);
-      return sendJson(res, 200, { success: true, data });
+      return sendJson(req, res, 200, { success: true, data });
     } catch (err) {
-      return sendJson(res, 500, { success: false, message: err.message });
+      return sendJson(req, res, 500, { success: false, message: err.message });
     }
   }
 
@@ -446,7 +524,7 @@ const server = http.createServer((req, res) => {
       const targetDays = parseInt(parsedUrl.searchParams.get('targetDays') || '7', 10);
       const integrated = db.getIntegratedData(stockDate, days);
       const recommendations = InventoryRebalancer.generateTransferRecommendations(integrated, { targetDays });
-      return sendJson(res, 200, {
+      return sendJson(req, res, 200, {
         success: true,
         stockDate: integrated.stockDate,
         salesDates: integrated.salesDates,
@@ -455,7 +533,7 @@ const server = http.createServer((req, res) => {
         availableItemGroups: integrated.availableItemGroups
       });
     } catch (err) {
-      return sendJson(res, 500, { success: false, message: err.message });
+      return sendJson(req, res, 500, { success: false, message: err.message });
     }
   }
 
@@ -466,7 +544,7 @@ const server = http.createServer((req, res) => {
       const targetDays = parseInt(parsedUrl.searchParams.get('targetDays') || '14', 10);
       const integrated = db.getIntegratedData(stockDate, days);
       const poSuggestions = InventoryRebalancer.generatePOSuggestions(integrated, { targetDays });
-      return sendJson(res, 200, {
+      return sendJson(req, res, 200, {
         success: true,
         stockDate: integrated.stockDate,
         salesDates: integrated.salesDates,
@@ -475,7 +553,7 @@ const server = http.createServer((req, res) => {
         availableItemGroups: integrated.availableItemGroups
       });
     } catch (err) {
-      return sendJson(res, 500, { success: false, message: err.message });
+      return sendJson(req, res, 500, { success: false, message: err.message });
     }
   }
 
@@ -485,9 +563,9 @@ const server = http.createServer((req, res) => {
       const days = parseInt(parsedUrl.searchParams.get('days') || '1', 10);
       const integrated = db.getIntegratedData(stockDate, days);
       const fsn = InventoryRebalancer.classifyFSN(integrated);
-      return sendJson(res, 200, { success: true, fsn });
+      return sendJson(req, res, 200, { success: true, fsn });
     } catch (err) {
-      return sendJson(res, 500, { success: false, message: err.message });
+      return sendJson(req, res, 500, { success: false, message: err.message });
     }
   }
 
@@ -495,9 +573,9 @@ const server = http.createServer((req, res) => {
     try {
       const days = Math.min(180, Math.max(1, parseInt(parsedUrl.searchParams.get('days') || '30', 10)));
       const data = db.getStockoutHistory(days);
-      return sendJson(res, 200, { success: true, data });
+      return sendJson(req, res, 200, { success: true, data });
     } catch (err) {
-      return sendJson(res, 500, { success: false, message: err.message });
+      return sendJson(req, res, 500, { success: false, message: err.message });
     }
   }
 
@@ -505,9 +583,9 @@ const server = http.createServer((req, res) => {
     try {
       const days = Math.min(365, Math.max(1, parseInt(parsedUrl.searchParams.get('days') || '90', 10)));
       const data = db.getABCAgingAnalysis(days);
-      return sendJson(res, 200, { success: true, data });
+      return sendJson(req, res, 200, { success: true, data });
     } catch (err) {
-      return sendJson(res, 500, { success: false, message: err.message });
+      return sendJson(req, res, 500, { success: false, message: err.message });
     }
   }
 
@@ -516,9 +594,9 @@ const server = http.createServer((req, res) => {
       const days = Math.min(180, Math.max(1, parseInt(parsedUrl.searchParams.get('days') || '30', 10)));
       const itemGroup = parsedUrl.searchParams.get('itemGroup') || null;
       const data = db.getOutletPerformance(days, itemGroup);
-      return sendJson(res, 200, { success: true, data });
+      return sendJson(req, res, 200, { success: true, data });
     } catch (err) {
-      return sendJson(res, 500, { success: false, message: err.message });
+      return sendJson(req, res, 500, { success: false, message: err.message });
     }
   }
 
@@ -526,9 +604,9 @@ const server = http.createServer((req, res) => {
     try {
       const days = Math.min(365, Math.max(1, parseInt(parsedUrl.searchParams.get('days') || '90', 10)));
       const data = db.getVendorAnalysis(days);
-      return sendJson(res, 200, { success: true, data });
+      return sendJson(req, res, 200, { success: true, data });
     } catch (err) {
-      return sendJson(res, 500, { success: false, message: err.message });
+      return sendJson(req, res, 500, { success: false, message: err.message });
     }
   }
 
@@ -539,9 +617,9 @@ const server = http.createServer((req, res) => {
       if (!allowedBuckets.includes(bucketType)) bucketType = 'week';
       const itemGroup = parsedUrl.searchParams.get('itemGroup') || null;
       const data = db.getTrendAnalysis(bucketType, itemGroup);
-      return sendJson(res, 200, { success: true, data });
+      return sendJson(req, res, 200, { success: true, data });
     } catch (err) {
-      return sendJson(res, 500, { success: false, message: err.message });
+      return sendJson(req, res, 500, { success: false, message: err.message });
     }
   }
 
@@ -552,9 +630,9 @@ const server = http.createServer((req, res) => {
     try {
       const itemGroupMap = db.getItemGroupByCode();
       const availableItemGroups = db.getDistinctItemGroups();
-      return sendJson(res, 200, { success: true, itemGroupMap, availableItemGroups });
+      return sendJson(req, res, 200, { success: true, itemGroupMap, availableItemGroups });
     } catch (err) {
-      return sendJson(res, 500, { success: false, message: err.message });
+      return sendJson(req, res, 500, { success: false, message: err.message });
     }
   }
 
@@ -562,9 +640,9 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && pathname === '/api/database/info') {
     try {
       const info = db.getDatabaseInfo();
-      return sendJson(res, 200, { success: true, info });
+      return sendJson(req, res, 200, { success: true, info });
     } catch (err) {
-      return sendJson(res, 500, { success: false, message: err.message });
+      return sendJson(req, res, 500, { success: false, message: err.message });
     }
   }
 
@@ -572,7 +650,7 @@ const server = http.createServer((req, res) => {
     try {
       const dbFile = db.dbPath;
       if (!fs.existsSync(dbFile)) {
-        return sendJson(res, 404, { success: false, message: 'File database tidak ditemukan.' });
+        return sendJson(req, res, 404, { success: false, message: 'File database tidak ditemukan.' });
       }
       const stat = fs.statSync(dbFile);
       const today = new Date().toISOString().split('T')[0];
@@ -586,16 +664,16 @@ const server = http.createServer((req, res) => {
       const stream = fs.createReadStream(dbFile);
       return stream.pipe(res);
     } catch (err) {
-      return sendJson(res, 500, { success: false, message: err.message });
+      return sendJson(req, res, 500, { success: false, message: err.message });
     }
   }
 
   if (req.method === 'POST' && pathname === '/api/database/clear') {
     try {
       db.clearAllData();
-      return sendJson(res, 200, { success: true, message: 'Seluruh data di database berhasil dikosongkan.' });
+      return sendJson(req, res, 200, { success: true, message: 'Seluruh data di database berhasil dikosongkan.' });
     } catch (err) {
-      return sendJson(res, 500, { success: false, message: err.message });
+      return sendJson(req, res, 500, { success: false, message: err.message });
     }
   }
 
@@ -606,11 +684,11 @@ const server = http.createServer((req, res) => {
       try {
         const buffer = Buffer.concat(chunks);
         if (buffer.length < 16) {
-          return sendJson(res, 400, { success: false, message: 'File database tidak valid atau kosong.' });
+          return sendJson(req, res, 400, { success: false, message: 'File database tidak valid atau kosong.' });
         }
         const header = buffer.subarray(0, 16).toString();
         if (!header.startsWith('SQLite format 3')) {
-          return sendJson(res, 400, { success: false, message: 'Format berkas harus berupa file database SQLite (.db).' });
+          return sendJson(req, res, 400, { success: false, message: 'Format berkas harus berupa file database SQLite (.db).' });
         }
 
         db.close();
@@ -619,9 +697,9 @@ const server = http.createServer((req, res) => {
         db.db = new DatabaseSync(db.dbPath);
         db.initSchema();
 
-        return sendJson(res, 200, { success: true, message: 'Database berhasil dipulihkan (restore)!' });
+        return sendJson(req, res, 200, { success: true, message: 'Database berhasil dipulihkan (restore)!' });
       } catch (err) {
-        return sendJson(res, 500, { success: false, message: 'Gagal mempulihkan database: ' + err.message });
+        return sendJson(req, res, 500, { success: false, message: 'Gagal mempulihkan database: ' + err.message });
       }
     });
     return;
@@ -640,15 +718,19 @@ const server = http.createServer((req, res) => {
 
     const ext = path.extname(filePath).toLowerCase();
     const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+    const isHtml = ext === '.html';
 
-    res.writeHead(200, {
+    // index.html must always be revalidated (it's what picks up new `?v=`
+    // cache-busted asset URLs); every other static file is safe to cache
+    // for a long time since every reference to it in index.html already
+    // carries a `?v=x.x` query string that changes when the file does.
+    const headers = {
       'Content-Type': contentType,
-      'Cache-Control': 'no-cache, no-store, must-revalidate',
-      'Pragma': 'no-cache',
-      'Expires': '0'
-    });
-    const stream = fs.createReadStream(filePath);
-    stream.pipe(res);
+      'Cache-Control': isHtml ? 'no-cache' : 'public, max-age=2592000',
+      'Vary': 'Accept-Encoding'
+    };
+
+    serveStaticFile(req, res, filePath, stats, ext, headers);
   });
 });
 

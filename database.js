@@ -124,7 +124,17 @@ class StockDatabase {
    * Initializes SQLite tables and indexes.
    */
   initSchema() {
+    // WAL (not MEMORY/OFF — this project has already lost a database once to
+    // an unsafe-durability setting on container restart) lets reads run
+    // concurrently with writes and avoids fsync-ing on every single insert
+    // during a bulk upload, while still surviving a crash/SIGKILL with at
+    // most the last uncommitted transaction lost.
     this.db.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA synchronous = NORMAL;
+      PRAGMA cache_size = -20000;
+      PRAGMA temp_store = MEMORY;
+      PRAGMA busy_timeout = 5000;
       PRAGMA foreign_keys = ON;
 
       -- 1. Daily Stock Reports
@@ -155,6 +165,10 @@ class StockDatabase {
       CREATE INDEX IF NOT EXISTS idx_records_date ON stock_records(report_date);
       CREATE INDEX IF NOT EXISTS idx_records_item ON stock_records(item_code);
       CREATE INDEX IF NOT EXISTS idx_records_outlet ON stock_records(outlet);
+      -- Composite: lets "WHERE report_date = ? GROUP BY outlet" (outlet
+      -- performance, coverage, PO) read straight off the index instead of
+      -- spilling to a temp B-tree to satisfy the GROUP BY.
+      CREATE INDEX IF NOT EXISTS idx_records_date_outlet ON stock_records(report_date, outlet);
 
       -- 2. Daily Sales Batches & Granular Records
       CREATE TABLE IF NOT EXISTS sales_batches (
@@ -194,6 +208,14 @@ class StockDatabase {
       CREATE INDEX IF NOT EXISTS idx_sales_date ON sales_records(transaction_date);
       CREATE INDEX IF NOT EXISTS idx_sales_outlet ON sales_records(outlet);
       CREATE INDEX IF NOT EXISTS idx_sales_item ON sales_records(item_code);
+      -- Composite: outlet performance / trend / rebalancing all filter by a
+      -- date window then GROUP BY outlet — same temp-B-tree elimination as
+      -- idx_records_date_outlet above.
+      CREATE INDEX IF NOT EXISTS idx_sales_date_outlet ON sales_records(transaction_date, outlet);
+      -- item_group has no index at all today, so every category filter and
+      -- every getDistinctItemGroups()/getItemGroupByCode() call (run on
+      -- almost every analytics tab load) does a full table scan.
+      CREATE INDEX IF NOT EXISTS idx_sales_itemgroup ON sales_records(item_group);
 
       -- 3. Daily Purchase Batches & Granular Records
       CREATE TABLE IF NOT EXISTS purchase_batches (
