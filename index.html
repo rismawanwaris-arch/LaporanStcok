@@ -686,6 +686,13 @@
         </div>
 
         <div class="filter-group">
+          <label for="stockout-category-filter"><i data-lucide="tag" style="width: 16px; height: 16px; display: inline;"></i> Kategori:</label>
+          <select id="stockout-category-filter">
+            <option value="ALL">-- Semua Kategori --</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
           <div class="search-wrapper">
             <i data-lucide="search"></i>
             <input type="text" id="stockout-search-input" placeholder="Cari nama barang atau kode item...">
@@ -811,6 +818,13 @@
         </div>
 
         <div class="filter-group">
+          <label for="abc-category-filter"><i data-lucide="tag" style="width: 16px; height: 16px; display: inline;"></i> Kategori:</label>
+          <select id="abc-category-filter">
+            <option value="ALL">-- Semua Kategori --</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
           <div class="search-wrapper">
             <i data-lucide="search"></i>
             <input type="text" id="abc-search-input" placeholder="Cari nama barang atau kode item...">
@@ -909,6 +923,13 @@
             <option value="30" selected>30 Hari</option>
             <option value="60">60 Hari</option>
             <option value="90">90 Hari</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <label for="outlet-category-filter"><i data-lucide="tag" style="width: 16px; height: 16px; display: inline;"></i> Kategori:</label>
+          <select id="outlet-category-filter">
+            <option value="ALL">-- Semua Kategori --</option>
           </select>
         </div>
 
@@ -1152,12 +1173,24 @@
           </select>
         </div>
 
+        <div class="filter-group">
+          <label for="trend-category-filter"><i data-lucide="tag" style="width: 16px; height: 16px; display: inline;"></i> Kategori:</label>
+          <select id="trend-category-filter">
+            <option value="ALL">-- Semua Kategori --</option>
+          </select>
+        </div>
+
         <div class="filter-group" style="margin-left: auto;">
           <button id="btn-export-trend" class="btn btn-success">
             <i data-lucide="file-spreadsheet"></i> Ekspor (XLSX)
           </button>
         </div>
       </section>
+
+      <div id="trend-category-note" style="display: none; font-size: 12px; color: var(--status-warning); background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.25); border-radius: var(--radius-md); padding: 10px 14px; margin-bottom: 4px;">
+        <i data-lucide="info" style="width: 14px; height: 14px; display: inline; vertical-align: middle;"></i>
+        Data pembelian tidak punya kategori (field ini hanya ada di data penjualan), jadi saat kategori difilter, garis "Total Pembelian" disembunyikan.
+      </div>
 
       <section class="vis-section" style="grid-template-columns: 1fr;">
         <div class="glass-panel chart-card">

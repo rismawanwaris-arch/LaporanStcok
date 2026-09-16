@@ -148,6 +148,25 @@ document.addEventListener('DOMContentLoaded', () => {
     return ymd;
   }
 
+  // Shared by every tab's "Kategori" filter (Item Group: VOUCHER/PETSHOP/ACC
+  // CAMPURAN/etc.) — populates a <select> from the backend's availableItemGroups
+  // list, preserving whatever the user already had selected.
+  function populateCategoryFilter(selectId, availableItemGroups) {
+    const filter = document.getElementById(selectId);
+    if (!filter) return;
+    const currentVal = filter.value;
+    const groups = availableItemGroups || [];
+
+    filter.innerHTML = '<option value="ALL">-- Semua Kategori --</option>';
+    groups.forEach(g => {
+      const opt = document.createElement('option');
+      opt.value = g;
+      opt.textContent = g;
+      filter.appendChild(opt);
+    });
+    if (groups.includes(currentVal)) filter.value = currentVal;
+  }
+
   async function loadStockByDate(reportDate) {
     try {
       showStatus(`Memuat data tanggal ${formatDateDisplay(reportDate)}...`, 'info');
@@ -1705,6 +1724,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       stockoutData = json.data;
       populateStockoutMerkFilter(stockoutData.items);
+      populateCategoryFilter('stockout-category-filter', stockoutData.availableItemGroups);
       renderStockoutTable();
     } catch (err) {
       console.error('Stockout history load error:', err);
@@ -1761,11 +1781,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const statusFilter = document.getElementById('stockout-status-filter')?.value || 'ALL';
     const merkFilter = document.getElementById('stockout-merk-filter')?.value || 'ALL';
+    const categoryFilter = document.getElementById('stockout-category-filter')?.value || 'ALL';
     const query = (document.getElementById('stockout-search-input')?.value || '').toLowerCase().trim();
 
     const filtered = items.filter(item => {
       if (statusFilter !== 'ALL' && classifyStockoutStatus(item) !== statusFilter) return false;
       if (merkFilter !== 'ALL' && item.merk !== merkFilter) return false;
+      if (categoryFilter !== 'ALL' && item.itemGroup !== categoryFilter) return false;
       if (query && !item.name.toLowerCase().includes(query) && !item.code.toLowerCase().includes(query)) return false;
       return true;
     });
@@ -1798,7 +1820,10 @@ document.addEventListener('DOMContentLoaded', () => {
           <td style="text-align: center; color: var(--text-muted);">${idx + 1}</td>
           <td style="font-family: monospace; font-size: 12px;">${escapeHtml(item.code)}</td>
           <td style="font-weight: 700;">${escapeHtml(item.name)}</td>
-          <td><span style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(item.merk || '-')}</span></td>
+          <td>
+            <div style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(item.merk || '-')}</div>
+            <div style="font-size: 10px; color: var(--text-muted);">${escapeHtml(item.itemGroup || '-')}</div>
+          </td>
           <td style="text-align: right; font-weight: 700;">${item.totalSold.toLocaleString('id-ID')}</td>
           <td style="text-align: right; color: var(--status-warning); font-weight: 700;">${item.ads}</td>
           <td style="text-align: right; font-weight: 800; color: ${rateColor};">${item.avgStockoutRate}%</td>
@@ -1820,8 +1845,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnExport = document.getElementById('btn-export-stockout');
 
     if (daysFilter) daysFilter.addEventListener('change', loadStockoutHistoryData);
+    const categoryFilter = document.getElementById('stockout-category-filter');
+
     if (statusFilter) statusFilter.addEventListener('change', renderStockoutTable);
     if (merkFilter) merkFilter.addEventListener('change', renderStockoutTable);
+    if (categoryFilter) categoryFilter.addEventListener('change', renderStockoutTable);
     if (searchInput) searchInput.addEventListener('input', renderStockoutTable);
 
     if (btnExport) {
@@ -1836,6 +1864,7 @@ document.addEventListener('DOMContentLoaded', () => {
           'Kode Item': item.code,
           'Nama Barang': item.name,
           'Merk': item.merk,
+          'Kategori': item.itemGroup,
           'Total Terjual': item.totalSold,
           'Penjualan/Hari (ADS)': item.ads,
           'Rata-rata Kekosongan (%)': item.avgStockoutRate,
@@ -1873,6 +1902,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!json.success || !json.data) throw new Error(json.message || 'Gagal mengambil data ABC & aging');
 
       abcAgingData = json.data;
+      populateCategoryFilter('abc-category-filter', abcAgingData.availableItemGroups);
       renderABCTable();
     } catch (err) {
       console.error('ABC/Aging load error:', err);
@@ -1912,11 +1942,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const classFilter = document.getElementById('abc-class-filter')?.value || 'ALL';
     const agingFilter = document.getElementById('abc-aging-filter')?.value || 'ALL';
+    const categoryFilter = document.getElementById('abc-category-filter')?.value || 'ALL';
     const query = (document.getElementById('abc-search-input')?.value || '').toLowerCase().trim();
 
     const filtered = items.filter(item => {
       if (classFilter !== 'ALL' && item.abcClass !== classFilter) return false;
       if (agingFilter !== 'ALL' && item.agingBucket !== agingFilter) return false;
+      if (categoryFilter !== 'ALL' && item.itemGroup !== categoryFilter) return false;
       if (query && !item.name.toLowerCase().includes(query) && !item.code.toLowerCase().includes(query)) return false;
       return true;
     });
@@ -1936,7 +1968,10 @@ document.addEventListener('DOMContentLoaded', () => {
           <td style="text-align: center; color: var(--text-muted);">${idx + 1}</td>
           <td style="font-family: monospace; font-size: 12px;">${escapeHtml(item.code)}</td>
           <td style="font-weight: 700;">${escapeHtml(item.name)}</td>
-          <td><span style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(item.merk || '-')}</span></td>
+          <td>
+            <div style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(item.merk || '-')}</div>
+            <div style="font-size: 10px; color: var(--text-muted);">${escapeHtml(item.itemGroup || '-')}</div>
+          </td>
           <td style="text-align: right; font-weight: 700;">${item.currentStock.toLocaleString('id-ID')}</td>
           <td style="text-align: center; font-weight: 800; color: ${classColor};">${item.abcClass}</td>
           <td style="text-align: right; color: var(--status-success);">Rp ${item.revenueInWindow.toLocaleString('id-ID')}</td>
@@ -1957,9 +1992,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const searchInput = document.getElementById('abc-search-input');
     const btnExport = document.getElementById('btn-export-abc');
 
+    const categoryFilter = document.getElementById('abc-category-filter');
+
     if (daysFilter) daysFilter.addEventListener('change', loadABCAgingData);
     if (classFilter) classFilter.addEventListener('change', renderABCTable);
     if (agingFilter) agingFilter.addEventListener('change', renderABCTable);
+    if (categoryFilter) categoryFilter.addEventListener('change', renderABCTable);
     if (searchInput) searchInput.addEventListener('input', renderABCTable);
 
     if (btnExport) {
@@ -1973,6 +2011,7 @@ document.addEventListener('DOMContentLoaded', () => {
           'Kode Item': item.code,
           'Nama Barang': item.name,
           'Merk': item.merk,
+          'Kategori': item.itemGroup,
           'Stok Saat Ini': item.currentStock,
           'Kelas ABC': item.abcClass,
           'Kontribusi Omzet': item.revenueInWindow,
@@ -2004,12 +2043,15 @@ document.addEventListener('DOMContentLoaded', () => {
       if (window.lucide) lucide.createIcons();
 
       const days = document.getElementById('outlet-days-filter')?.value || 30;
-      const res = await fetch(`/api/analytics/outlet-performance?days=${encodeURIComponent(days)}`);
+      const category = document.getElementById('outlet-category-filter')?.value || 'ALL';
+      const categoryParam = category !== 'ALL' ? `&itemGroup=${encodeURIComponent(category)}` : '';
+      const res = await fetch(`/api/analytics/outlet-performance?days=${encodeURIComponent(days)}${categoryParam}`);
       const json = await res.json();
 
       if (!json.success || !json.data) throw new Error(json.message || 'Gagal mengambil data performa cabang');
 
       outletPerfData = json.data;
+      populateCategoryFilter('outlet-category-filter', outletPerfData.availableItemGroups);
       renderOutletTable();
     } catch (err) {
       console.error('Outlet performance load error:', err);
@@ -2076,11 +2118,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function setupOutletPerformanceControls() {
     const daysFilter = document.getElementById('outlet-days-filter');
+    const categoryFilter = document.getElementById('outlet-category-filter');
     const statusFilter = document.getElementById('outlet-status-filter');
     const searchInput = document.getElementById('outlet-search-input');
     const btnExport = document.getElementById('btn-export-outlet');
 
     if (daysFilter) daysFilter.addEventListener('change', loadOutletPerformanceData);
+    if (categoryFilter) categoryFilter.addEventListener('change', loadOutletPerformanceData);
     if (statusFilter) statusFilter.addEventListener('change', renderOutletTable);
     if (searchInput) searchInput.addEventListener('input', renderOutletTable);
 
@@ -2105,7 +2149,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const ws = XLSX.utils.json_to_sheet(dataToExport);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Performa_Cabang');
-        const filename = `Performa_Cabang_${outletPerfData.days}hari.xlsx`;
+        const categorySuffix = outletPerfData.itemGroup ? `_${outletPerfData.itemGroup.replace(/\s+/g, '_')}` : '';
+        const filename = `Performa_Cabang_${outletPerfData.days}hari${categorySuffix}.xlsx`;
         XLSX.writeFile(wb, filename);
       });
     }
@@ -2264,12 +2309,19 @@ document.addEventListener('DOMContentLoaded', () => {
       if (window.lucide) lucide.createIcons();
 
       const bucket = document.getElementById('trend-bucket-filter')?.value || 'week';
-      const res = await fetch(`/api/analytics/trend?bucket=${encodeURIComponent(bucket)}`);
+      const category = document.getElementById('trend-category-filter')?.value || 'ALL';
+      const categoryParam = category !== 'ALL' ? `&itemGroup=${encodeURIComponent(category)}` : '';
+      const res = await fetch(`/api/analytics/trend?bucket=${encodeURIComponent(bucket)}${categoryParam}`);
       const json = await res.json();
 
       if (!json.success || !json.data) throw new Error(json.message || 'Gagal mengambil data tren');
 
       trendData = json.data;
+      populateCategoryFilter('trend-category-filter', trendData.availableItemGroups);
+
+      const noteEl = document.getElementById('trend-category-note');
+      if (noteEl) noteEl.style.display = trendData.itemGroup ? 'block' : 'none';
+
       renderTrendChart();
       renderTrendTable();
     } catch (err) {
@@ -2296,6 +2348,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const totalRevenue = buckets.reduce((s, b) => s + b.revenue, 0);
     const totalProfit = buckets.reduce((s, b) => s + b.profit, 0);
     const totalPurchase = buckets.reduce((s, b) => s + b.purchAmount, 0);
+    const purchaseAvailable = trendData.purchaseDataAvailable !== false;
 
     const statRevenue = document.getElementById('stat-trend-revenue');
     const statProfit = document.getElementById('stat-trend-profit');
@@ -2303,7 +2356,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const statBuckets = document.getElementById('stat-trend-buckets');
     if (statRevenue) statRevenue.textContent = `Rp ${totalRevenue.toLocaleString('id-ID')}`;
     if (statProfit) statProfit.textContent = `Rp ${totalProfit.toLocaleString('id-ID')}`;
-    if (statPurchase) statPurchase.textContent = `Rp ${totalPurchase.toLocaleString('id-ID')}`;
+    if (statPurchase) statPurchase.textContent = purchaseAvailable ? `Rp ${totalPurchase.toLocaleString('id-ID')}` : 'Tidak tersedia';
     if (statBuckets) statBuckets.textContent = buckets.length;
 
     if (trendChartInstance) trendChartInstance.destroy();
@@ -2339,14 +2392,16 @@ document.addEventListener('DOMContentLoaded', () => {
             fill: true,
             tension: 0.3
           },
-          {
+          // Purchase data has no category field, so this line is only meaningful
+          // (and only included) when no category filter is active.
+          ...(purchaseAvailable ? [{
             label: 'Total Pembelian',
             data: buckets.map(b => b.purchAmount),
             borderColor: '#a855f7',
             backgroundColor: 'rgba(168, 85, 247, 0.08)',
             fill: true,
             tension: 0.3
-          }
+          }] : [])
         ]
       },
       options: {
@@ -2392,6 +2447,8 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
+    const purchaseAvailable = trendData.purchaseDataAvailable !== false;
+
     // Most recent period first, easier to spot the latest trend at a glance
     const rows = [...buckets].reverse();
     let rowsHtml = '';
@@ -2403,8 +2460,8 @@ document.addEventListener('DOMContentLoaded', () => {
           <td style="text-align: right; font-weight: 700; color: var(--status-success);">Rp ${b.revenue.toLocaleString('id-ID')}</td>
           <td style="text-align: right;">${b.qty.toLocaleString('id-ID')}</td>
           <td style="text-align: right; color: var(--accent-cyan);">Rp ${b.profit.toLocaleString('id-ID')}</td>
-          <td style="text-align: right; color: var(--accent-purple);">Rp ${b.purchAmount.toLocaleString('id-ID')}</td>
-          <td style="text-align: right;">${b.purchQty.toLocaleString('id-ID')}</td>
+          <td style="text-align: right; color: var(--accent-purple);">${purchaseAvailable ? `Rp ${b.purchAmount.toLocaleString('id-ID')}` : '-'}</td>
+          <td style="text-align: right;">${purchaseAvailable ? b.purchQty.toLocaleString('id-ID') : '-'}</td>
         </tr>
       `;
     });
@@ -2414,9 +2471,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function setupTrendAnalysisControls() {
     const bucketFilter = document.getElementById('trend-bucket-filter');
+    const categoryFilter = document.getElementById('trend-category-filter');
     const btnExport = document.getElementById('btn-export-trend');
 
     if (bucketFilter) bucketFilter.addEventListener('change', loadTrendAnalysisData);
+    if (categoryFilter) categoryFilter.addEventListener('change', loadTrendAnalysisData);
 
     if (btnExport) {
       btnExport.addEventListener('click', () => {
@@ -2424,19 +2483,21 @@ document.addEventListener('DOMContentLoaded', () => {
           alert('Tidak ada data tren untuk diekspor.');
           return;
         }
+        const purchaseAvailable = trendData.purchaseDataAvailable !== false;
         const dataToExport = trendData.buckets.map(b => ({
           'Periode': formatTrendBucketLabel(b, trendData.bucketType),
           'Hari Tercatat': b.days,
           'Omzet Penjualan': b.revenue,
           'Qty Terjual': b.qty,
           'Profit': b.profit,
-          'Total Pembelian': b.purchAmount,
-          'Qty Dibeli': b.purchQty
+          'Total Pembelian': purchaseAvailable ? b.purchAmount : 'Tidak tersedia (difilter kategori)',
+          'Qty Dibeli': purchaseAvailable ? b.purchQty : '-'
         }));
         const ws = XLSX.utils.json_to_sheet(dataToExport);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Tren_Periode');
-        const filename = `Tren_${TREND_BUCKET_LABELS[trendData.bucketType] || trendData.bucketType}.xlsx`;
+        const categorySuffix = trendData.itemGroup ? `_${trendData.itemGroup.replace(/\s+/g, '_')}` : '';
+        const filename = `Tren_${TREND_BUCKET_LABELS[trendData.bucketType] || trendData.bucketType}${categorySuffix}.xlsx`;
         XLSX.writeFile(wb, filename);
       });
     }
