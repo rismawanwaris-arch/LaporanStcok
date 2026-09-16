@@ -6,11 +6,44 @@
 const { DatabaseSync } = require('node:sqlite');
 const path = require('path');
 const fs = require('fs');
+const StockDataParser = require('./data/stock-data');
+
+/**
+ * Delegates to StockDataParser's outlet alias dictionary (already reused by
+ * both the stock CSV parser and TransactionParser for sales/purchase), so
+ * there is one canonical mapping instead of a second one drifting out of
+ * sync here.
+ */
+function normalizeOutletName(raw) {
+  if (raw === null || raw === undefined) return raw;
+  const cleaned = String(raw).trim();
+  if (!cleaned) return cleaned;
+  return StockDataParser.normalizeOutletName(cleaned) || cleaned;
+}
+
+/**
+ * Outlet-name corrections added to StockDataParser's map after some reports
+ * had already been uploaded under the old spelling (Bee Accounting's stock
+ * export uses "CL 1"-"CL 4" for the Cilengkrang branches while the
+ * sales/purchase export spells them "CILENGKRANG"/"CILENGKRANG 2-4"; "BK6
+ * PANGARITAN"/"BK7 NAGROG" in the sales export were missing the space stock
+ * uses). Listed explicitly (rather than derived live from the parser map) so
+ * this one-time backfill keeps working even as that map gains new entries
+ * that don't need migrating.
+ */
+const OUTLET_NAME_MIGRATIONS = {
+  'CL 1': 'CILENGKRANG',
+  'CL 2': 'CILENGKRANG 2',
+  'CL 3': 'CILENGKRANG 3',
+  'CL 4': 'CILENGKRANG 4',
+  'BK6 PANGARITAN': 'BK 6 PANGARITAN',
+  'BK7 NAGROG': 'BK 7 NAGROG',
+};
 
 class StockDatabase {
   constructor(dbPath) {
     this.dbPath = dbPath || process.env.DB_PATH || path.join(__dirname, 'data', 'stock_history.db');
-    
+
     // Ensure directory exists
     const dir = path.dirname(this.dbPath);
     if (!fs.existsSync(dir)) {
@@ -19,6 +52,72 @@ class StockDatabase {
 
     this.db = new DatabaseSync(this.dbPath);
     this.initSchema();
+    this.migrateOutletNames();
+  }
+
+  /**
+   * One-time (idempotent, runs on every startup) cleanup of outlet names
+   * already stored from before OUTLET_NAME_MIGRATIONS existed, so previously
+   * uploaded reports get fixed without needing to re-upload. Covers both the
+   * per-record tables and the raw_json snapshot each stock report keeps
+   * (that's what the Matriks Stok Cabang tab renders from).
+   */
+  migrateOutletNames() {
+    const tables = ['stock_records', 'sales_records', 'purchase_records'];
+    tables.forEach(table => {
+      Object.entries(OUTLET_NAME_MIGRATIONS).forEach(([raw, canonical]) => {
+        this.db.prepare(`UPDATE ${table} SET outlet = ? WHERE outlet = ?`).run(canonical, raw);
+      });
+    });
+    this.migrateRawJsonOutletNames();
+  }
+
+  /**
+   * Renames outlet keys inside each stored report's raw_json (merks[].outlets,
+   * merks[].items[].stocks, allOutlets), merging stock quantities when a
+   * rename collides with an already-canonical entry.
+   */
+  migrateRawJsonOutletNames() {
+    const rows = this.db.prepare(`SELECT id, raw_json FROM reports`).all();
+    rows.forEach(row => {
+      let data;
+      try {
+        data = JSON.parse(row.raw_json);
+      } catch (e) {
+        return;
+      }
+
+      let changed = false;
+      const renameList = (list) => {
+        const renamed = list.map(o => OUTLET_NAME_MIGRATIONS[o] || o);
+        const deduped = [...new Set(renamed)];
+        if (JSON.stringify(deduped) !== JSON.stringify(list)) changed = true;
+        return deduped;
+      };
+
+      Object.values(data.merks || {}).forEach(merkObj => {
+        if (Array.isArray(merkObj.outlets)) {
+          merkObj.outlets = renameList(merkObj.outlets);
+        }
+        Object.values(merkObj.items || {}).forEach(item => {
+          if (!item.stocks) return;
+          const newStocks = {};
+          Object.entries(item.stocks).forEach(([outlet, qty]) => {
+            const canonical = OUTLET_NAME_MIGRATIONS[outlet] || outlet;
+            if (canonical !== outlet) changed = true;
+            newStocks[canonical] = (newStocks[canonical] || 0) + qty;
+          });
+          item.stocks = newStocks;
+        });
+      });
+      if (Array.isArray(data.allOutlets)) {
+        data.allOutlets = renameList(data.allOutlets);
+      }
+
+      if (changed) {
+        this.db.prepare(`UPDATE reports SET raw_json = ? WHERE id = ?`).run(JSON.stringify(data), row.id);
+      }
+    });
   }
 
   /**
@@ -179,7 +278,7 @@ class StockDatabase {
         Object.values(merkObj.items).forEach(item => {
           Object.entries(item.stocks).forEach(([outlet, stockQty]) => {
             if (stockQty > 0) {
-              insertRecord.run(reportId, reportDate, merkName, item.code, item.name, outlet, stockQty);
+              insertRecord.run(reportId, reportDate, merkName, item.code, item.name, normalizeOutletName(outlet), stockQty);
             }
           });
         });
@@ -284,7 +383,7 @@ class StockDatabase {
       parsedSales.records.forEach(r => {
         insertRecord.run(
           batchId, r.transactionNo, r.transactionDate, r.transactionTime,
-          r.outlet, r.customer, r.itemCode, r.itemName, r.itemGroup,
+          normalizeOutletName(r.outlet), r.customer, r.itemCode, r.itemName, r.itemGroup,
           r.qty, r.unit, r.sellPrice, r.discount, r.subtotal, r.cogs, r.profitLoss, r.cashier
         );
       });
@@ -369,7 +468,7 @@ class StockDatabase {
       parsedPurchases.records.forEach(r => {
         insertRecord.run(
           batchId, r.invoiceNo, r.purchaseDate, r.refInvoice,
-          r.outlet, r.vendor, r.itemCode, r.itemName,
+          normalizeOutletName(r.outlet), r.vendor, r.itemCode, r.itemName,
           r.qty, r.unit, r.unitPrice, r.subtotal, r.totalInvoice
         );
       });
