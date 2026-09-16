@@ -278,6 +278,76 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // ============================================================
+  // GENERIC VIRTUAL SCROLL for large non-virtualized analytics tables
+  // (Ketahanan Stok, Riwayat Stockout, ABC & Aging can each reach 1000+
+  // filtered rows). Same windowed-render technique as the main stock matrix
+  // (see VT_ROW_HEIGHT/renderVisibleRows above), generalized to any table
+  // whose rows share one fixed height, so only ~20-40 <tr> ever exist in the
+  // DOM regardless of how many rows are filtered in.
+  // ============================================================
+  const ANALYTICS_VT_ROW_HEIGHT = 56; // tallest row here (Ketahanan Stok, up to 2 badge lines) plus padding
+  const analyticsVirtualItems = {}; // tableBodyId -> current filtered+sorted array
+
+  function renderVirtualRows(tableBodyId, colCount, rowHtmlFn, resetScroll) {
+    const tbody = document.getElementById(tableBodyId);
+    const wrapper = tbody ? (tbody.closest('.data-table-container') || tbody.closest('.table-wrapper')) : null;
+    if (!tbody || !wrapper) return;
+
+    const items = analyticsVirtualItems[tableBodyId] || [];
+    if (resetScroll) wrapper.scrollTop = 0;
+
+    const table = tbody.closest('table');
+    const thead = table ? table.querySelector('thead') : null;
+    const theadHeight = thead ? thead.offsetHeight : 0;
+    const scrollTop = Math.max(0, wrapper.scrollTop - theadHeight);
+    const viewportHeight = wrapper.clientHeight || 600;
+
+    const total = items.length;
+    const startIndex = Math.max(0, Math.floor(scrollTop / ANALYTICS_VT_ROW_HEIGHT) - VT_BUFFER_ROWS);
+    const visibleCount = Math.ceil(viewportHeight / ANALYTICS_VT_ROW_HEIGHT) + VT_BUFFER_ROWS * 2;
+    const endIndex = Math.min(total, startIndex + visibleCount);
+
+    const topSpacer = startIndex * ANALYTICS_VT_ROW_HEIGHT;
+    const bottomSpacer = Math.max(0, (total - endIndex) * ANALYTICS_VT_ROW_HEIGHT);
+
+    let html = '';
+    if (topSpacer > 0) html += `<tr class="v-spacer-row"><td colspan="${colCount}" style="height:${topSpacer}px; padding:0; border:none; background:transparent;"></td></tr>`;
+    for (let i = startIndex; i < endIndex; i++) html += rowHtmlFn(items[i], i);
+    if (bottomSpacer > 0) html += `<tr class="v-spacer-row"><td colspan="${colCount}" style="height:${bottomSpacer}px; padding:0; border:none; background:transparent;"></td></tr>`;
+
+    tbody.innerHTML = html;
+    if (window.lucide) lucide.createIcons();
+  }
+
+  // Stores the current filtered+sorted array for a table and (re)renders its
+  // visible window. Call this from render*Table() every time filters/sort
+  // change instead of building the full rowsHtml string.
+  function setVirtualItemsAndRender(tableBodyId, items, colCount, rowHtmlFn) {
+    analyticsVirtualItems[tableBodyId] = items;
+    renderVirtualRows(tableBodyId, colCount, rowHtmlFn, true);
+  }
+
+  // Wires the scroll listener once (call from setup*Controls()); the thead
+  // is static HTML so, unlike the main table, this never needs re-wiring.
+  function setupVirtualScroll(tableBodyId, colCount, rowHtmlFn) {
+    const tbody = document.getElementById(tableBodyId);
+    const wrapper = tbody ? (tbody.closest('.data-table-container') || tbody.closest('.table-wrapper')) : null;
+    if (!wrapper || wrapper._analyticsVtHandler) return;
+
+    let ticking = false;
+    const handler = () => {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(() => {
+        renderVirtualRows(tableBodyId, colCount, rowHtmlFn, false);
+        ticking = false;
+      });
+    };
+    wrapper._analyticsVtHandler = handler;
+    wrapper.addEventListener('scroll', handler, { passive: true });
+  }
+
   async function loadStockByDate(reportDate) {
     try {
       showStatus(`Memuat data tanggal ${formatDateDisplay(reportDate)}...`, 'info');
@@ -1638,50 +1708,55 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    let rowsHtml = '';
-    items.forEach((item, idx) => {
-      const criticalOutlets = [];
-      const overstockOutlets = [];
+    setVirtualItemsAndRender('coverage-table-body', items, 8, buildCoverageRowHtml);
+  }
 
-      Object.entries(item.outlets).forEach(([outlet, out]) => {
-        if (out.status === 'OUT_OF_STOCK') {
-          criticalOutlets.push(`<span class="status-badge badge-critical">${escapeHtml(outlet)}: KOSONG (${out.ads}/hr)</span>`);
-        } else if (out.status === 'CRITICAL') {
-          criticalOutlets.push(`<span class="status-badge badge-critical">${escapeHtml(outlet)}: ${out.doc} hr</span>`);
-        } else if (out.status === 'OVERSTOCK') {
-          overstockOutlets.push(`<span class="status-badge badge-overstock">${escapeHtml(outlet)}: ${out.doc} hr (${out.stock} pcs)</span>`);
-        }
-      });
+  // Extracted from renderCoverageTable so the virtual scroller can call it
+  // per-visible-row instead of building HTML for the entire filtered list.
+  function buildCoverageRowHtml(item, idx) {
+    const criticalOutlets = [];
+    const overstockOutlets = [];
 
-      let outletDetails = '';
-      if (criticalOutlets.length > 0) {
-        outletDetails += `<div style="margin-bottom: 4px;"><strong>Kritis:</strong> ${criticalOutlets.slice(0, 4).join(' ')} ${criticalOutlets.length > 4 ? `+${criticalOutlets.length - 4}` : ''}</div>`;
+    Object.entries(item.outlets).forEach(([outlet, out]) => {
+      if (out.status === 'OUT_OF_STOCK') {
+        criticalOutlets.push(`<span class="status-badge badge-critical">${escapeHtml(outlet)}: KOSONG (${out.ads}/hr)</span>`);
+      } else if (out.status === 'CRITICAL') {
+        criticalOutlets.push(`<span class="status-badge badge-critical">${escapeHtml(outlet)}: ${out.doc} hr</span>`);
+      } else if (out.status === 'OVERSTOCK') {
+        overstockOutlets.push(`<span class="status-badge badge-overstock">${escapeHtml(outlet)}: ${out.doc} hr (${out.stock} pcs)</span>`);
       }
-      if (overstockOutlets.length > 0) {
-        outletDetails += `<div><strong>Overstock:</strong> ${overstockOutlets.slice(0, 4).join(' ')} ${overstockOutlets.length > 4 ? `+${overstockOutlets.length - 4}` : ''}</div>`;
-      }
-      if (!outletDetails) outletDetails = '<span style="color: var(--text-muted); font-size: 11px;">Kondisi Normal / Seimbang</span>';
-
-      const docDisplay = item.globalDoC >= 999 ? '∞' : `${item.globalDoC} hr`;
-
-      rowsHtml += `
-        <tr>
-          <td style="text-align: center; color: var(--text-muted);">${idx + 1}</td>
-          <td style="font-family: monospace; font-size: 12px;">${escapeHtml(item.code)}</td>
-          <td style="font-weight: 700;">${escapeHtml(item.name)}</td>
-          <td>
-            <div style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(item.merk || '-')}</div>
-            <div style="font-size: 10px; color: var(--text-muted);">${escapeHtml(item.itemGroup || '-')}</div>
-          </td>
-          <td style="text-align: right; font-weight: 700;">${item.totalStock.toLocaleString('id-ID')}</td>
-          <td style="text-align: right; color: var(--status-warning); font-weight: 700;">${item.totalADS}</td>
-          <td style="text-align: right; font-weight: 800; color: ${item.globalDoC < 3 ? 'var(--status-danger)' : 'var(--status-success)'};">${docDisplay}</td>
-          <td style="font-size: 11.5px;">${outletDetails}</td>
-        </tr>
-      `;
     });
 
-    tableBody.innerHTML = rowsHtml;
+    // white-space:nowrap + ellipsis keeps each line from wrapping onto a
+    // second visual line, which matters here since the virtual scroller
+    // assumes a fixed row height (ANALYTICS_VT_ROW_HEIGHT).
+    const lineStyle = 'white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
+    let outletDetails = '';
+    if (criticalOutlets.length > 0) {
+      outletDetails += `<div style="margin-bottom: 4px; ${lineStyle}"><strong>Kritis:</strong> ${criticalOutlets.slice(0, 4).join(' ')} ${criticalOutlets.length > 4 ? `+${criticalOutlets.length - 4}` : ''}</div>`;
+    }
+    if (overstockOutlets.length > 0) {
+      outletDetails += `<div style="${lineStyle}"><strong>Overstock:</strong> ${overstockOutlets.slice(0, 4).join(' ')} ${overstockOutlets.length > 4 ? `+${overstockOutlets.length - 4}` : ''}</div>`;
+    }
+    if (!outletDetails) outletDetails = '<span style="color: var(--text-muted); font-size: 11px;">Kondisi Normal / Seimbang</span>';
+
+    const docDisplay = item.globalDoC >= 999 ? '∞' : `${item.globalDoC} hr`;
+
+    return `
+      <tr>
+        <td style="text-align: center; color: var(--text-muted);">${idx + 1}</td>
+        <td style="font-family: monospace; font-size: 12px;">${escapeHtml(item.code)}</td>
+        <td style="font-weight: 700;">${escapeHtml(item.name)}</td>
+        <td>
+          <div style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(item.merk || '-')}</div>
+          <div style="font-size: 10px; color: var(--text-muted);">${escapeHtml(item.itemGroup || '-')}</div>
+        </td>
+        <td style="text-align: right; font-weight: 700;">${item.totalStock.toLocaleString('id-ID')}</td>
+        <td style="text-align: right; color: var(--status-warning); font-weight: 700;">${item.totalADS}</td>
+        <td style="text-align: right; font-weight: 800; color: ${item.globalDoC < 3 ? 'var(--status-danger)' : 'var(--status-success)'};">${docDisplay}</td>
+        <td style="font-size: 11.5px;">${outletDetails}</td>
+      </tr>
+    `;
   }
 
   function setupCoverageControls() {
@@ -1693,6 +1768,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const categoryFilter = document.getElementById('coverage-category-filter');
 
     initSortableTable('coverage-table-body', renderCoverageTable);
+    setupVirtualScroll('coverage-table-body', 8, buildCoverageRowHtml);
 
     if (daysFilter) daysFilter.addEventListener('change', loadCoverageData);
     if (statusFilter) statusFilter.addEventListener('change', renderCoverageTable);
@@ -1985,44 +2061,45 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    let rowsHtml = '';
-    filtered.forEach((item, idx) => {
-      const status = classifyStockoutStatus(item);
-      const statusBadge = status === 'CHRONIC'
-        ? `<span class="status-badge badge-high-urgency">🔴 KRONIS</span>`
-        : status === 'WATCH'
-          ? `<span class="status-badge badge-med-urgency">🟡 WASPADA</span>`
-          : `<span class="status-badge" style="background: rgba(16, 185, 129, 0.12); color: var(--status-success);">🟢 AMAN</span>`;
+    setVirtualItemsAndRender('stockout-table-body', filtered, 10, buildStockoutRowHtml);
+  }
 
-      const rateColor = item.avgStockoutRate >= 20 ? 'var(--status-danger)' : (item.avgStockoutRate >= 10 ? 'var(--status-warning)' : 'var(--status-success)');
+  // Extracted from renderStockoutTable so the virtual scroller can call it
+  // per-visible-row instead of building HTML for the entire filtered list.
+  function buildStockoutRowHtml(item, idx) {
+    const status = classifyStockoutStatus(item);
+    const statusBadge = status === 'CHRONIC'
+      ? `<span class="status-badge badge-high-urgency">🔴 KRONIS</span>`
+      : status === 'WATCH'
+        ? `<span class="status-badge badge-med-urgency">🟡 WASPADA</span>`
+        : `<span class="status-badge" style="background: rgba(16, 185, 129, 0.12); color: var(--status-success);">🟢 AMAN</span>`;
 
-      const problemOutlets = item.outletDetails.filter(o => o.daysOutOfStock > 0);
-      let outletBadges = problemOutlets.slice(0, 4)
-        .map(o => `<span class="status-badge badge-critical">${escapeHtml(o.outlet)}: ${o.daysOutOfStock} hr</span>`)
-        .join(' ');
-      if (problemOutlets.length > 4) outletBadges += ` <span style="color: var(--text-muted); font-size: 11px;">+${problemOutlets.length - 4}</span>`;
-      if (!outletBadges) outletBadges = '<span style="color: var(--text-muted); font-size: 11px;">Tidak pernah kosong</span>';
+    const rateColor = item.avgStockoutRate >= 20 ? 'var(--status-danger)' : (item.avgStockoutRate >= 10 ? 'var(--status-warning)' : 'var(--status-success)');
 
-      rowsHtml += `
-        <tr>
-          <td style="text-align: center; color: var(--text-muted);">${idx + 1}</td>
-          <td style="font-family: monospace; font-size: 12px;">${escapeHtml(item.code)}</td>
-          <td style="font-weight: 700;">${escapeHtml(item.name)}</td>
-          <td>
-            <div style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(item.merk || '-')}</div>
-            <div style="font-size: 10px; color: var(--text-muted);">${escapeHtml(item.itemGroup || '-')}</div>
-          </td>
-          <td style="text-align: right; font-weight: 700;">${item.totalSold.toLocaleString('id-ID')}</td>
-          <td style="text-align: right; color: var(--status-warning); font-weight: 700;">${item.ads}</td>
-          <td style="text-align: right; font-weight: 800; color: ${rateColor};">${item.avgStockoutRate}%</td>
-          <td style="font-size: 11.5px;">${escapeHtml(item.worstOutlet)}${item.maxDaysOutOfStock > 0 ? ` (${item.maxDaysOutOfStock} hr)` : ''}</td>
-          <td style="text-align: center;">${statusBadge}</td>
-          <td style="font-size: 11.5px;">${outletBadges}</td>
-        </tr>
-      `;
-    });
+    const problemOutlets = item.outletDetails.filter(o => o.daysOutOfStock > 0);
+    let outletBadges = problemOutlets.slice(0, 4)
+      .map(o => `<span class="status-badge badge-critical">${escapeHtml(o.outlet)}: ${o.daysOutOfStock} hr</span>`)
+      .join(' ');
+    if (problemOutlets.length > 4) outletBadges += ` <span style="color: var(--text-muted); font-size: 11px;">+${problemOutlets.length - 4}</span>`;
+    if (!outletBadges) outletBadges = '<span style="color: var(--text-muted); font-size: 11px;">Tidak pernah kosong</span>';
 
-    tableBody.innerHTML = rowsHtml;
+    return `
+      <tr>
+        <td style="text-align: center; color: var(--text-muted);">${idx + 1}</td>
+        <td style="font-family: monospace; font-size: 12px;">${escapeHtml(item.code)}</td>
+        <td style="font-weight: 700;">${escapeHtml(item.name)}</td>
+        <td>
+          <div style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(item.merk || '-')}</div>
+          <div style="font-size: 10px; color: var(--text-muted);">${escapeHtml(item.itemGroup || '-')}</div>
+        </td>
+        <td style="text-align: right; font-weight: 700;">${item.totalSold.toLocaleString('id-ID')}</td>
+        <td style="text-align: right; color: var(--status-warning); font-weight: 700;">${item.ads}</td>
+        <td style="text-align: right; font-weight: 800; color: ${rateColor};">${item.avgStockoutRate}%</td>
+        <td style="font-size: 11.5px;">${escapeHtml(item.worstOutlet)}${item.maxDaysOutOfStock > 0 ? ` (${item.maxDaysOutOfStock} hr)` : ''}</td>
+        <td style="text-align: center;">${statusBadge}</td>
+        <td style="font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${outletBadges}</td>
+      </tr>
+    `;
   }
 
   function setupStockoutControls() {
@@ -2033,6 +2110,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnExport = document.getElementById('btn-export-stockout');
 
     initSortableTable('stockout-table-body', renderStockoutTable);
+    setupVirtualScroll('stockout-table-body', 10, buildStockoutRowHtml);
 
     if (daysFilter) daysFilter.addEventListener('change', loadStockoutHistoryData);
     const categoryFilter = document.getElementById('stockout-category-filter');
@@ -2151,31 +2229,32 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    let rowsHtml = '';
-    filtered.forEach((item, idx) => {
-      const classColor = item.abcClass === 'A' ? 'var(--status-success)' : item.abcClass === 'B' ? 'var(--status-warning)' : item.abcClass === 'C' ? 'var(--text-secondary)' : 'var(--text-muted)';
-      const agingCell = `${AGING_BUCKET_BADGES[item.agingBucket] || ''}${!item.neverSold ? `<div style="margin-top: 3px; color: var(--text-secondary); font-size: 11px;">${item.agingDays} hari</div>` : ''}`;
+    setVirtualItemsAndRender('abc-table-body', filtered, 10, buildABCRowHtml);
+  }
 
-      rowsHtml += `
-        <tr>
-          <td style="text-align: center; color: var(--text-muted);">${idx + 1}</td>
-          <td style="font-family: monospace; font-size: 12px;">${escapeHtml(item.code)}</td>
-          <td style="font-weight: 700;">${escapeHtml(item.name)}</td>
-          <td>
-            <div style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(item.merk || '-')}</div>
-            <div style="font-size: 10px; color: var(--text-muted);">${escapeHtml(item.itemGroup || '-')}</div>
-          </td>
-          <td style="text-align: right; font-weight: 700;">${item.currentStock.toLocaleString('id-ID')}</td>
-          <td style="text-align: center; font-weight: 800; color: ${classColor};">${item.abcClass}</td>
-          <td style="text-align: right; color: var(--status-success);">Rp ${item.revenueInWindow.toLocaleString('id-ID')}</td>
-          <td style="font-size: 11.5px;">${item.neverSold ? '-' : formatDateDisplay(item.lastSaleDate)}</td>
-          <td style="text-align: right;">${agingCell}</td>
-          <td style="text-align: right; font-weight: 800; color: var(--accent-cyan);">Rp ${item.estimatedValue.toLocaleString('id-ID')}</td>
-        </tr>
-      `;
-    });
+  // Extracted from renderABCTable so the virtual scroller can call it
+  // per-visible-row instead of building HTML for the entire filtered list.
+  function buildABCRowHtml(item, idx) {
+    const classColor = item.abcClass === 'A' ? 'var(--status-success)' : item.abcClass === 'B' ? 'var(--status-warning)' : item.abcClass === 'C' ? 'var(--text-secondary)' : 'var(--text-muted)';
+    const agingCell = `${AGING_BUCKET_BADGES[item.agingBucket] || ''}${!item.neverSold ? `<div style="margin-top: 3px; color: var(--text-secondary); font-size: 11px;">${item.agingDays} hari</div>` : ''}`;
 
-    tableBody.innerHTML = rowsHtml;
+    return `
+      <tr>
+        <td style="text-align: center; color: var(--text-muted);">${idx + 1}</td>
+        <td style="font-family: monospace; font-size: 12px;">${escapeHtml(item.code)}</td>
+        <td style="font-weight: 700;">${escapeHtml(item.name)}</td>
+        <td>
+          <div style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(item.merk || '-')}</div>
+          <div style="font-size: 10px; color: var(--text-muted);">${escapeHtml(item.itemGroup || '-')}</div>
+        </td>
+        <td style="text-align: right; font-weight: 700;">${item.currentStock.toLocaleString('id-ID')}</td>
+        <td style="text-align: center; font-weight: 800; color: ${classColor};">${item.abcClass}</td>
+        <td style="text-align: right; color: var(--status-success);">Rp ${item.revenueInWindow.toLocaleString('id-ID')}</td>
+        <td style="font-size: 11.5px;">${item.neverSold ? '-' : formatDateDisplay(item.lastSaleDate)}</td>
+        <td style="text-align: right;">${agingCell}</td>
+        <td style="text-align: right; font-weight: 800; color: var(--accent-cyan);">Rp ${item.estimatedValue.toLocaleString('id-ID')}</td>
+      </tr>
+    `;
   }
 
   function setupABCControls() {
@@ -2188,6 +2267,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const categoryFilter = document.getElementById('abc-category-filter');
 
     initSortableTable('abc-table-body', renderABCTable);
+    setupVirtualScroll('abc-table-body', 10, buildABCRowHtml);
 
     if (daysFilter) daysFilter.addEventListener('change', loadABCAgingData);
     if (classFilter) classFilter.addEventListener('change', renderABCTable);
