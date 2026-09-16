@@ -451,7 +451,8 @@ const server = http.createServer((req, res) => {
         stockDate: integrated.stockDate,
         salesDates: integrated.salesDates,
         count: recommendations.length,
-        recommendations
+        recommendations,
+        availableItemGroups: integrated.availableItemGroups
       });
     } catch (err) {
       return sendJson(res, 500, { success: false, message: err.message });
@@ -470,7 +471,8 @@ const server = http.createServer((req, res) => {
         stockDate: integrated.stockDate,
         salesDates: integrated.salesDates,
         count: poSuggestions.length,
-        suggestions: poSuggestions
+        suggestions: poSuggestions,
+        availableItemGroups: integrated.availableItemGroups
       });
     } catch (err) {
       return sendJson(res, 500, { success: false, message: err.message });
@@ -538,6 +540,19 @@ const server = http.createServer((req, res) => {
       const itemGroup = parsedUrl.searchParams.get('itemGroup') || null;
       const data = db.getTrendAnalysis(bucketType, itemGroup);
       return sendJson(res, 200, { success: true, data });
+    } catch (err) {
+      return sendJson(res, 500, { success: false, message: err.message });
+    }
+  }
+
+  // Item Group (category) map — the stock CSV itself carries no category
+  // column, only sales_records does, so the Matriks Stok Cabang table fetches
+  // this once and cross-references item_code -> category client-side.
+  if (req.method === 'GET' && pathname === '/api/analytics/item-groups') {
+    try {
+      const itemGroupMap = db.getItemGroupByCode();
+      const availableItemGroups = db.getDistinctItemGroups();
+      return sendJson(res, 200, { success: true, itemGroupMap, availableItemGroups });
     } catch (err) {
       return sendJson(res, 500, { success: false, message: err.message });
     }
