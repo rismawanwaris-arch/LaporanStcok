@@ -6,7 +6,7 @@
   <title>Voucher Analytics & Smart Rebalancing - Bee Accounting</title>
   
   <!-- Font & Styling -->
-  <link rel="stylesheet" href="css/style.css?v=2.7">
+  <link rel="stylesheet" href="css/style.css?v=2.8">
   
   <!-- Lucide Icons, Chart.js, SortableJS: deferred so they download in
        parallel with HTML parsing instead of blocking it, while still
@@ -1468,10 +1468,17 @@
         <!-- Section 3: Riwayat Batch Data -->
         <div class="sidebar-section-title" style="margin-top: 22px;">
           <i data-lucide="history"></i>
-          <span>3. Riwayat Batch Penjualan & Pembelian</span>
+          <span>3. Riwayat Batch Stok, Penjualan & Pembelian</span>
         </div>
 
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 10px;">
+          <div>
+            <span style="font-size: 11px; font-weight: 700; color: var(--accent-cyan); text-transform: uppercase;">Batch Stok</span>
+            <div id="import-history-stock" style="margin-top: 6px; max-height: 260px; overflow-y: auto;">
+              <p style="color: var(--text-muted); font-size: 11.5px;">Memuat data...</p>
+            </div>
+          </div>
+
           <div>
             <span style="font-size: 11px; font-weight: 700; color: var(--accent-purple); text-transform: uppercase;">Batch Penjualan</span>
             <div id="import-history-sales" style="margin-top: 6px; max-height: 260px; overflow-y: auto;">
@@ -1499,11 +1506,11 @@
 
   <!-- Load internal Javascript Modules (deferred: downloads overlap with
        HTML parsing/CDN scripts above, execution stays in this order) -->
-  <script defer src="data/stock-data.js?v=2.7"></script>
-  <script defer src="js/stock-analytics.js?v=2.7"></script>
-  <script defer src="js/outlet-sorter.js?v=2.7"></script>
-  <script defer src="js/inventory-rebalancer.js?v=2.7"></script>
-  <script defer src="js/app.js?v=2.7"></script>
+  <script defer src="data/stock-data.js?v=2.8"></script>
+  <script defer src="js/stock-analytics.js?v=2.8"></script>
+  <script defer src="js/outlet-sorter.js?v=2.8"></script>
+  <script defer src="js/inventory-rebalancer.js?v=2.8"></script>
+  <script defer src="js/app.js?v=2.8"></script>
 
   <!-- Auto-initialize lucide icons. Deferred scripts above only finish
        running right before DOMContentLoaded, so `lucide` isn't guaranteed to
