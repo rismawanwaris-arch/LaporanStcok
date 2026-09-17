@@ -91,6 +91,25 @@ function extractDateFromCSV(csvText, fallbackFilename) {
   return new Date().toISOString().split('T')[0];
 }
 
+/**
+ * Which region(s) a just-uploaded stock report's own outlets belong to
+ * (BANDUNG, CIMAHI, or both if a single file genuinely mixes branch outlets
+ * from each) — purely for the upload confirmation message, so the user can
+ * see at a glance that the file was recognized without having to pick a
+ * region themselves. GDG (the shared central warehouse) is excluded since
+ * it isn't specific to either region and would otherwise make every Cimahi
+ * file that also has a Gudang column misleadingly report as "Cimahi & Bandung".
+ */
+function detectUploadRegions(parsedData) {
+  const regions = new Set(
+    (parsedData.allOutlets || [])
+      .filter(o => o !== 'GDG')
+      .map(o => StockDataParser.getOutletRegion(o))
+  );
+  if (regions.size === 0) return 'Tidak diketahui';
+  return Array.from(regions).map(r => r === 'CIMAHI' ? 'Cimahi' : 'Bandung').join(' & ');
+}
+
 // MIME types mapping
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -309,12 +328,14 @@ const server = http.createServer((req, res) => {
         }
 
         const saved = db.saveReport(reportDate, filename || 'upload.csv', parsed);
+        const detectedRegion = detectUploadRegions(parsed);
 
-        console.log(`[Upload Stok] Tersimpan untuk tanggal: ${reportDate} (${filename})`);
+        console.log(`[Upload Stok] Tersimpan untuk tanggal: ${reportDate} (${filename}) — wilayah: ${detectedRegion}`);
         return sendJson(req, res, 200, {
           success: true,
-          message: `Laporan stok tanggal ${reportDate} berhasil disimpan!`,
+          message: `Laporan stok tanggal ${reportDate} berhasil disimpan! (Wilayah terdeteksi: ${detectedRegion})`,
           reportDate,
+          detectedRegion,
           summary: saved
         });
       } catch (err) {
@@ -486,10 +507,12 @@ const server = http.createServer((req, res) => {
         if (parsed.merks && Object.keys(parsed.merks).length > 0) {
           const overview = StockAnalytics.getOverview(parsed);
           const saved = db.saveReport(reportDate, payload.filename || 'upload.csv', parsed);
+          const detectedRegion = detectUploadRegions(parsed);
           return sendJson(req, res, 200, {
             success: true,
             type: 'stock',
-            message: `Otomatis terdeteksi: Laporan Stok (${overview.global.totalItems} item) tanggal ${reportDate}!`,
+            message: `Otomatis terdeteksi: Laporan Stok wilayah ${detectedRegion} (${overview.global.totalItems} item) tanggal ${reportDate}!`,
+            detectedRegion,
             summary: saved
           });
         }
