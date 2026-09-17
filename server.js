@@ -33,8 +33,7 @@ function autoSeedDefaultReports() {
         const csvText = fs.readFileSync(csvPath, 'utf8');
         const reportDate = extractDateFromCSV(csvText, '1308 vcr.csv');
         const parsed = StockDataParser.parse(csvText);
-        const overview = StockAnalytics.getOverview(parsed);
-        db.saveReport(reportDate, '1308 vcr.csv', parsed, overview);
+        db.saveReport(reportDate, '1308 vcr.csv', parsed);
         console.log(`[Seed] Data stok awal disimpan untuk tanggal ${reportDate}!`);
       }
     }
@@ -309,8 +308,7 @@ const server = http.createServer((req, res) => {
           return sendJson(req, res, 400, { success: false, message: 'Format CSV stok tidak dikenali atau kosong.' });
         }
 
-        const overview = StockAnalytics.getOverview(parsed);
-        const saved = db.saveReport(reportDate, filename || 'upload.csv', parsed, overview);
+        const saved = db.saveReport(reportDate, filename || 'upload.csv', parsed);
 
         console.log(`[Upload Stok] Tersimpan untuk tanggal: ${reportDate} (${filename})`);
         return sendJson(req, res, 200, {
@@ -487,7 +485,7 @@ const server = http.createServer((req, res) => {
         const parsed = StockDataParser.parse(textContent);
         if (parsed.merks && Object.keys(parsed.merks).length > 0) {
           const overview = StockAnalytics.getOverview(parsed);
-          const saved = db.saveReport(reportDate, payload.filename || 'upload.csv', parsed, overview);
+          const saved = db.saveReport(reportDate, payload.filename || 'upload.csv', parsed);
           return sendJson(req, res, 200, {
             success: true,
             type: 'stock',
@@ -510,7 +508,8 @@ const server = http.createServer((req, res) => {
     try {
       const stockDate = parsedUrl.searchParams.get('stockDate') || undefined;
       const days = parseInt(parsedUrl.searchParams.get('days') || '1', 10);
-      const data = db.getIntegratedData(stockDate, days);
+      const region = parsedUrl.searchParams.get('region') || null;
+      const data = db.getIntegratedData(stockDate, days, region);
       return sendJson(req, res, 200, { success: true, data });
     } catch (err) {
       return sendJson(req, res, 500, { success: false, message: err.message });
@@ -522,7 +521,8 @@ const server = http.createServer((req, res) => {
       const stockDate = parsedUrl.searchParams.get('stockDate') || undefined;
       const days = parseInt(parsedUrl.searchParams.get('days') || '1', 10);
       const targetDays = parseInt(parsedUrl.searchParams.get('targetDays') || '7', 10);
-      const integrated = db.getIntegratedData(stockDate, days);
+      const region = parsedUrl.searchParams.get('region') || null;
+      const integrated = db.getIntegratedData(stockDate, days, region);
       const recommendations = InventoryRebalancer.generateTransferRecommendations(integrated, { targetDays });
       return sendJson(req, res, 200, {
         success: true,
@@ -530,7 +530,8 @@ const server = http.createServer((req, res) => {
         salesDates: integrated.salesDates,
         count: recommendations.length,
         recommendations,
-        availableItemGroups: integrated.availableItemGroups
+        availableItemGroups: integrated.availableItemGroups,
+        availableRegions: integrated.availableRegions
       });
     } catch (err) {
       return sendJson(req, res, 500, { success: false, message: err.message });
@@ -542,7 +543,8 @@ const server = http.createServer((req, res) => {
       const stockDate = parsedUrl.searchParams.get('stockDate') || undefined;
       const days = parseInt(parsedUrl.searchParams.get('days') || '1', 10);
       const targetDays = parseInt(parsedUrl.searchParams.get('targetDays') || '14', 10);
-      const integrated = db.getIntegratedData(stockDate, days);
+      const region = parsedUrl.searchParams.get('region') || null;
+      const integrated = db.getIntegratedData(stockDate, days, region);
       const poSuggestions = InventoryRebalancer.generatePOSuggestions(integrated, { targetDays });
       return sendJson(req, res, 200, {
         success: true,
@@ -550,7 +552,8 @@ const server = http.createServer((req, res) => {
         salesDates: integrated.salesDates,
         count: poSuggestions.length,
         suggestions: poSuggestions,
-        availableItemGroups: integrated.availableItemGroups
+        availableItemGroups: integrated.availableItemGroups,
+        availableRegions: integrated.availableRegions
       });
     } catch (err) {
       return sendJson(req, res, 500, { success: false, message: err.message });
@@ -593,7 +596,8 @@ const server = http.createServer((req, res) => {
     try {
       const days = Math.min(180, Math.max(1, parseInt(parsedUrl.searchParams.get('days') || '30', 10)));
       const itemGroup = parsedUrl.searchParams.get('itemGroup') || null;
-      const data = db.getOutletPerformance(days, itemGroup);
+      const region = parsedUrl.searchParams.get('region') || null;
+      const data = db.getOutletPerformance(days, itemGroup, region);
       return sendJson(req, res, 200, { success: true, data });
     } catch (err) {
       return sendJson(req, res, 500, { success: false, message: err.message });
@@ -631,6 +635,23 @@ const server = http.createServer((req, res) => {
       const itemGroupMap = db.getItemGroupByCode();
       const availableItemGroups = db.getDistinctItemGroups();
       return sendJson(req, res, 200, { success: true, itemGroupMap, availableItemGroups });
+    } catch (err) {
+      return sendJson(req, res, 500, { success: false, message: err.message });
+    }
+  }
+
+  // Outlet -> region (Bandung/Cimahi) map — like item-groups above, this has
+  // no data-driven source (Bee Accounting exports don't carry a region
+  // field), so the Matriks Stok Cabang table fetches this once and filters
+  // its (client-side) outlet columns against it.
+  if (req.method === 'GET' && pathname === '/api/analytics/outlet-regions') {
+    try {
+      const cimahiOutlets = Array.from(StockDataParser.CIMAHI_OUTLETS);
+      return sendJson(req, res, 200, {
+        success: true,
+        cimahiOutlets,
+        availableRegions: ['BANDUNG', 'CIMAHI']
+      });
     } catch (err) {
       return sendJson(req, res, 500, { success: false, message: err.message });
     }

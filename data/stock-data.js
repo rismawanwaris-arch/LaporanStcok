@@ -111,10 +111,29 @@ class StockDataParser {
       'SA SUKAASIH': 'SA',
       'SS (C)': 'SS',
       'SS SINDANG SARI': 'SS',
-      'PETSHOP': 'PETSHOP'
+      'PETSHOP': 'PETSHOP',
+      // Cimahi KBB branches (separate stock report from the main Bandung
+      // outlets above) — normalized to consistent all-caps so they render
+      // the same way as every other outlet instead of mixed-case.
+      'Kalapa Cell': 'KALAPA CELL',
+      'Permata Cell': 'PERMATA CELL',
+      'Rawa Cell': 'RAWA CELL'
     };
 
     return map[name] || name;
+  }
+
+  /**
+   * Outlets belonging to the Cimahi KBB region — everything else (the
+   * Bandung-area branches) falls through to the default. There is no way to
+   * derive region from the data itself (Bee Accounting exports don't carry
+   * it), so this is a hardcoded lookup, kept next to normalizeOutletName's
+   * own hardcoded outlet list for the same reason.
+   */
+  static CIMAHI_OUTLETS = new Set(['KALAPA CELL', 'PERMATA CELL', 'RAWA CELL']);
+
+  static getOutletRegion(outletName) {
+    return this.CIMAHI_OUTLETS.has(outletName) ? 'CIMAHI' : 'BANDUNG';
   }
 
   /**
