@@ -50,7 +50,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // item_code -> item_group ("VOUCHER"/"PETSHOP"/etc.), derived from sales
     // history. The stock CSV itself has no category column, so this is
     // fetched once separately and cross-referenced when filtering the table.
-    itemGroupMap: {}
+    itemGroupMap: {},
+    // Outlet names belonging to the Cimahi region (everything else is
+    // Bandung) — hardcoded server-side (see StockDataParser.CIMAHI_OUTLETS),
+    // fetched once so the Matriks Stok Cabang tab can filter its outlet
+    // columns by region client-side.
+    cimahiOutlets: new Set()
   };
 
   // DOM Elements
@@ -98,6 +103,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Check backend API and database first, fallback to static CSV
     checkBackendAndLoad();
     loadItemGroupMap();
+    loadOutletRegionMap();
   }
 
   // Fetches the item_code -> item_group (category) map derived from sales
@@ -114,6 +120,24 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (e) {
       console.warn('Gagal memuat pemetaan kategori item (mode lokal/offline?)', e);
     }
+  }
+
+  // Fetches the Cimahi outlet list once, used by getOutletRegion() below to
+  // classify every outlet as BANDUNG or CIMAHI for the "Wilayah" filters.
+  async function loadOutletRegionMap() {
+    try {
+      const res = await fetch('/api/analytics/outlet-regions');
+      const json = await res.json();
+      if (json.success) {
+        appState.cimahiOutlets = new Set(json.cimahiOutlets || []);
+      }
+    } catch (e) {
+      console.warn('Gagal memuat pemetaan wilayah outlet (mode lokal/offline?)', e);
+    }
+  }
+
+  function getOutletRegion(outlet) {
+    return appState.cimahiOutlets.has(outlet) ? 'CIMAHI' : 'BANDUNG';
   }
 
   // 1. Check Backend API and Load Dates History
@@ -488,6 +512,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if (categoryFilter) {
       categoryFilter.addEventListener('change', filterTableRows);
     }
+
+    // Unlike Kategori (filters which item ROWS show), Wilayah changes which
+    // outlet COLUMNS exist — needs the header/totals rebuilt, not just the
+    // visible row window re-filtered.
+    const regionFilter = document.getElementById('stock-region-filter');
+    if (regionFilter) {
+      regionFilter.addEventListener('change', renderTableAndCharts);
+    }
   }
 
   function onMerkChanged() {
@@ -517,10 +549,19 @@ document.addEventListener('DOMContentLoaded', () => {
     return appState.parsedData.merks[appState.activeMerk];
   }
 
+  // Applies the "Wilayah" (Bandung/Cimahi) filter to an outlet list — shared
+  // by renderTableAndCharts and renderTable's own fallback so both the table
+  // columns and the charts stay in sync regardless of call path.
+  function filterOutletsByRegion(outlets) {
+    const region = document.getElementById('stock-region-filter')?.value || 'ALL';
+    if (region === 'ALL') return outlets;
+    return outlets.filter(o => getOutletRegion(o) === region);
+  }
+
   function renderTableAndCharts() {
     const merkData = getActiveMerkData();
     if (!merkData) return;
-    const outlets = OutletSorter.sortOutlets(merkData.outlets, appState.activeMerk);
+    const outlets = filterOutletsByRegion(OutletSorter.sortOutlets(merkData.outlets, appState.activeMerk));
     renderTable(merkData, outlets);
     renderCharts(merkData, outlets);
   }
@@ -550,7 +591,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!merkData) return;
     }
     if (!outlets) {
-      outlets = OutletSorter.sortOutlets(merkData.outlets, appState.activeMerk);
+      outlets = filterOutletsByRegion(OutletSorter.sortOutlets(merkData.outlets, appState.activeMerk));
     }
 
     const items = Object.values(merkData.items);
@@ -1492,7 +1533,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (window.lucide) lucide.createIcons();
 
       const days = document.getElementById('rebalance-days-filter')?.value || '1';
-      const url = `/api/analytics/rebalancing?stockDate=${encodeURIComponent(appState.currentDate || '')}&days=${encodeURIComponent(days)}`;
+      const region = document.getElementById('rebalance-region-filter')?.value || 'ALL';
+      const regionParam = region !== 'ALL' ? `&region=${encodeURIComponent(region)}` : '';
+      const url = `/api/analytics/rebalancing?stockDate=${encodeURIComponent(appState.currentDate || '')}&days=${encodeURIComponent(days)}${regionParam}`;
       const res = await fetch(url);
       const json = await res.json();
 
@@ -1615,10 +1658,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnExport = document.getElementById('btn-export-rebalance');
 
     const categoryFilter = document.getElementById('rebalance-category-filter');
+    const regionFilter = document.getElementById('rebalance-region-filter');
 
     initSortableTable('rebalance-table-body', renderRebalanceTable);
 
     if (daysFilter) daysFilter.addEventListener('change', loadRebalanceData);
+    if (regionFilter) regionFilter.addEventListener('change', loadRebalanceData);
     if (urgencyFilter) urgencyFilter.addEventListener('change', renderRebalanceTable);
     if (merkFilter) merkFilter.addEventListener('change', renderRebalanceTable);
     if (categoryFilter) categoryFilter.addEventListener('change', renderRebalanceTable);
@@ -1668,7 +1713,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (window.lucide) lucide.createIcons();
 
       const days = document.getElementById('coverage-days-filter')?.value || '1';
-      const url = `/api/analytics/integrated?stockDate=${encodeURIComponent(appState.currentDate || '')}&days=${encodeURIComponent(days)}`;
+      const region = document.getElementById('coverage-region-filter')?.value || 'ALL';
+      const regionParam = region !== 'ALL' ? `&region=${encodeURIComponent(region)}` : '';
+      const url = `/api/analytics/integrated?stockDate=${encodeURIComponent(appState.currentDate || '')}&days=${encodeURIComponent(days)}${regionParam}`;
       const res = await fetch(url);
       const json = await res.json();
 
@@ -1766,11 +1813,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnExport = document.getElementById('btn-export-coverage');
 
     const categoryFilter = document.getElementById('coverage-category-filter');
+    const regionFilter = document.getElementById('coverage-region-filter');
 
     initSortableTable('coverage-table-body', renderCoverageTable);
     setupVirtualScroll('coverage-table-body', 8, buildCoverageRowHtml);
 
     if (daysFilter) daysFilter.addEventListener('change', loadCoverageData);
+    if (regionFilter) regionFilter.addEventListener('change', loadCoverageData);
     if (statusFilter) statusFilter.addEventListener('change', renderCoverageTable);
     if (categoryFilter) categoryFilter.addEventListener('change', renderCoverageTable);
     if (searchInput) searchInput.addEventListener('input', renderCoverageTable);
@@ -1817,7 +1866,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (window.lucide) lucide.createIcons();
 
       const days = document.getElementById('po-days-filter')?.value || '1';
-      const url = `/api/analytics/po?stockDate=${encodeURIComponent(appState.currentDate || '')}&days=${encodeURIComponent(days)}`;
+      const region = document.getElementById('po-region-filter')?.value || 'ALL';
+      const regionParam = region !== 'ALL' ? `&region=${encodeURIComponent(region)}` : '';
+      const url = `/api/analytics/po?stockDate=${encodeURIComponent(appState.currentDate || '')}&days=${encodeURIComponent(days)}${regionParam}`;
       const res = await fetch(url);
       const json = await res.json();
 
@@ -1921,10 +1972,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnExport = document.getElementById('btn-export-po');
 
     const categoryFilter = document.getElementById('po-category-filter');
+    const regionFilter = document.getElementById('po-region-filter');
 
     initSortableTable('po-table-body', renderPOTable);
 
     if (daysFilter) daysFilter.addEventListener('change', loadPOData);
+    if (regionFilter) regionFilter.addEventListener('change', loadPOData);
 
     if (merkFilter) merkFilter.addEventListener('change', renderPOTable);
     if (categoryFilter) categoryFilter.addEventListener('change', renderPOTable);
@@ -2321,7 +2374,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const days = document.getElementById('outlet-days-filter')?.value || 30;
       const category = document.getElementById('outlet-category-filter')?.value || 'ALL';
       const categoryParam = category !== 'ALL' ? `&itemGroup=${encodeURIComponent(category)}` : '';
-      const res = await fetch(`/api/analytics/outlet-performance?days=${encodeURIComponent(days)}${categoryParam}`);
+      const region = document.getElementById('outlet-region-filter')?.value || 'ALL';
+      const regionParam = region !== 'ALL' ? `&region=${encodeURIComponent(region)}` : '';
+      const res = await fetch(`/api/analytics/outlet-performance?days=${encodeURIComponent(days)}${categoryParam}${regionParam}`);
       const json = await res.json();
 
       if (!json.success || !json.data) throw new Error(json.message || 'Gagal mengambil data performa cabang');
@@ -2397,6 +2452,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function setupOutletPerformanceControls() {
     const daysFilter = document.getElementById('outlet-days-filter');
     const categoryFilter = document.getElementById('outlet-category-filter');
+    const regionFilter = document.getElementById('outlet-region-filter');
     const statusFilter = document.getElementById('outlet-status-filter');
     const searchInput = document.getElementById('outlet-search-input');
     const btnExport = document.getElementById('btn-export-outlet');
@@ -2405,6 +2461,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (daysFilter) daysFilter.addEventListener('change', loadOutletPerformanceData);
     if (categoryFilter) categoryFilter.addEventListener('change', loadOutletPerformanceData);
+    if (regionFilter) regionFilter.addEventListener('change', loadOutletPerformanceData);
     if (statusFilter) statusFilter.addEventListener('change', renderOutletTable);
     if (searchInput) searchInput.addEventListener('input', renderOutletTable);
 
