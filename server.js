@@ -92,22 +92,57 @@ function extractDateFromCSV(csvText, fallbackFilename) {
 }
 
 /**
- * Which region(s) a just-uploaded stock report's own outlets belong to
- * (BANDUNG, CIMAHI, or both if a single file genuinely mixes branch outlets
- * from each) — purely for the upload confirmation message, so the user can
- * see at a glance that the file was recognized without having to pick a
- * region themselves. GDG (the shared central warehouse) is excluded since
- * it isn't specific to either region and would otherwise make every Cimahi
- * file that also has a Gudang column misleadingly report as "Cimahi & Bandung".
+ * Bandung and Cimahi use separate item code numbering in Bee Accounting, so
+ * the same code (e.g. "001341") can mean two different products depending on
+ * region. Auto-detecting the region from outlet names isn't enough to guard
+ * against this: uploads are tagged with an explicit user-chosen region
+ * instead (see /api/upload), and Cimahi's codes are namespaced with a prefix
+ * here so they can never collide with a Bandung item sharing the same raw
+ * code, no matter which upload lands first.
  */
-function detectUploadRegions(parsedData) {
-  const regions = new Set(
+const CIMAHI_ITEM_CODE_PREFIX = 'CMH-';
+
+function namespaceItemCodesForRegion(parsedData, region) {
+  if (region !== 'CIMAHI') return parsedData;
+
+  const prefixCode = (code) => (code.startsWith(CIMAHI_ITEM_CODE_PREFIX) ? code : CIMAHI_ITEM_CODE_PREFIX + code);
+
+  const namespaced = { allOutlets: parsedData.allOutlets || [], allItems: {}, merks: {} };
+
+  Object.entries(parsedData.merks || {}).forEach(([merkName, merkObj]) => {
+    const items = {};
+    Object.entries(merkObj.items || {}).forEach(([code, item]) => {
+      const newCode = prefixCode(code);
+      items[newCode] = { ...item, code: newCode };
+    });
+    namespaced.merks[merkName] = { ...merkObj, items };
+  });
+
+  Object.entries(parsedData.allItems || {}).forEach(([code, name]) => {
+    namespaced.allItems[prefixCode(code)] = name;
+  });
+
+  return namespaced;
+}
+
+/**
+ * Guards against picking the wrong region in the upload dropdown: compares
+ * the outlets actually present in the file against the outlets known to
+ * belong to the OTHER region. GDG (shared central warehouse) is excluded
+ * since it isn't specific to either region.
+ */
+function findRegionMismatch(parsedData, expectedRegion) {
+  const outletRegions = new Set(
     (parsedData.allOutlets || [])
-      .filter(o => o !== 'GDG')
-      .map(o => StockDataParser.getOutletRegion(o))
+      .filter((o) => o !== 'GDG')
+      .map((o) => StockDataParser.getOutletRegion(o))
   );
-  if (regions.size === 0) return 'Tidak diketahui';
-  return Array.from(regions).map(r => r === 'CIMAHI' ? 'Cimahi' : 'Bandung').join(' & ');
+  const wrongRegion = Array.from(outletRegions).find((r) => r !== expectedRegion);
+  return wrongRegion || null;
+}
+
+function regionLabel(region) {
+  return region === 'CIMAHI' ? 'Cimahi' : 'Bandung';
 }
 
 // MIME types mapping
@@ -305,7 +340,12 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && pathname === '/api/upload') {
     readJsonBody(req, res, (payload) => {
       try {
-        const { filename, csvText, fileBase64, customDate } = payload;
+        const { filename, csvText, fileBase64, customDate, region } = payload;
+
+        if (region !== 'BANDUNG' && region !== 'CIMAHI') {
+          return sendJson(req, res, 400, { success: false, message: 'Pilih wilayah cabang (Bandung/Cimahi) terlebih dahulu sebelum mengunggah laporan stok.' });
+        }
+
         let textContent = csvText;
 
         if (!textContent && fileBase64) {
@@ -327,15 +367,23 @@ const server = http.createServer((req, res) => {
           return sendJson(req, res, 400, { success: false, message: 'Format CSV stok tidak dikenali atau kosong.' });
         }
 
-        const saved = db.saveReport(reportDate, filename || 'upload.csv', parsed);
-        const detectedRegion = detectUploadRegions(parsed);
+        const mismatch = findRegionMismatch(parsed, region);
+        if (mismatch) {
+          return sendJson(req, res, 400, {
+            success: false,
+            message: `Berkas ini tampaknya berisi outlet wilayah ${regionLabel(mismatch)}, bukan ${regionLabel(region)} yang dipilih. Periksa kembali berkas atau pilihan wilayahnya.`
+          });
+        }
 
-        console.log(`[Upload Stok] Tersimpan untuk tanggal: ${reportDate} (${filename}) — wilayah: ${detectedRegion}`);
+        const namespaced = namespaceItemCodesForRegion(parsed, region);
+        const saved = db.saveReport(reportDate, filename || 'upload.csv', namespaced);
+
+        console.log(`[Upload Stok] Tersimpan untuk tanggal: ${reportDate} (${filename}) — wilayah: ${regionLabel(region)}`);
         return sendJson(req, res, 200, {
           success: true,
-          message: `Laporan stok tanggal ${reportDate} berhasil disimpan! (Wilayah terdeteksi: ${detectedRegion})`,
+          message: `Laporan stok tanggal ${reportDate} (wilayah ${regionLabel(region)}) berhasil disimpan!`,
           reportDate,
-          detectedRegion,
+          region,
           summary: saved
         });
       } catch (err) {
@@ -505,14 +553,30 @@ const server = http.createServer((req, res) => {
         const reportDate = payload.customDate || extractDateFromCSV(textContent, payload.filename);
         const parsed = StockDataParser.parse(textContent);
         if (parsed.merks && Object.keys(parsed.merks).length > 0) {
-          const overview = StockAnalytics.getOverview(parsed);
-          const saved = db.saveReport(reportDate, payload.filename || 'upload.csv', parsed);
-          const detectedRegion = detectUploadRegions(parsed);
+          const region = payload.region;
+          if (region !== 'BANDUNG' && region !== 'CIMAHI') {
+            return sendJson(req, res, 400, {
+              success: false,
+              message: 'Berkas ini terdeteksi sebagai Laporan Stok. Pilih wilayah cabang (Bandung/Cimahi) terlebih dahulu, lalu unggah ulang.'
+            });
+          }
+
+          const mismatch = findRegionMismatch(parsed, region);
+          if (mismatch) {
+            return sendJson(req, res, 400, {
+              success: false,
+              message: `Berkas ini tampaknya berisi outlet wilayah ${regionLabel(mismatch)}, bukan ${regionLabel(region)} yang dipilih. Periksa kembali berkas atau pilihan wilayahnya.`
+            });
+          }
+
+          const namespaced = namespaceItemCodesForRegion(parsed, region);
+          const overview = StockAnalytics.getOverview(namespaced);
+          const saved = db.saveReport(reportDate, payload.filename || 'upload.csv', namespaced);
           return sendJson(req, res, 200, {
             success: true,
             type: 'stock',
-            message: `Otomatis terdeteksi: Laporan Stok wilayah ${detectedRegion} (${overview.global.totalItems} item) tanggal ${reportDate}!`,
-            detectedRegion,
+            message: `Otomatis terdeteksi: Laporan Stok wilayah ${regionLabel(region)} (${overview.global.totalItems} item) tanggal ${reportDate}!`,
+            region,
             summary: saved
           });
         }

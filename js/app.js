@@ -2901,6 +2901,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function uploadSpecificFile(file, endpoint, label) {
     const customDate = document.getElementById('import-custom-date')?.value || '';
+    const stockRegion = document.getElementById('import-stock-region')?.value || '';
+
+    // Stock uploads carry their own item-code space per region (Bandung vs
+    // Cimahi), so the region is required upfront instead of being guessed
+    // from outlet names — picking the wrong one would let the server confuse
+    // two different products that happen to share a code across regions.
+    if (endpoint === '/api/upload' && !stockRegion) {
+      alert('Pilih wilayah cabang (Bandung/Cimahi) terlebih dahulu sebelum mengunggah laporan stok.');
+      return;
+    }
+
     showStatus(
       customDate
         ? `Mengunggah berkas ${label}: "${file.name}" untuk tanggal ${formatDateDisplay(customDate)}...`
@@ -2915,6 +2926,9 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         let payload = { filename: file.name };
         if (customDate) payload.customDate = customDate;
+        if (stockRegion && (endpoint === '/api/upload' || endpoint === '/api/upload-auto')) {
+          payload.region = stockRegion;
+        }
 
         if (isBinaryExcel) {
           payload.fileBase64 = e.target.result;

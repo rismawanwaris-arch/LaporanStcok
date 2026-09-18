@@ -6,7 +6,7 @@
   <title>Voucher Analytics & Smart Rebalancing - Bee Accounting</title>
   
   <!-- Font & Styling -->
-  <link rel="stylesheet" href="css/style.css?v=2.8">
+  <link rel="stylesheet" href="css/style.css?v=2.9">
   
   <!-- Lucide Icons, Chart.js, SortableJS: deferred so they download in
        parallel with HTML parsing instead of blocking it, while still
@@ -1400,6 +1400,22 @@
           </button>
         </div>
 
+        <!-- 0b. Wilayah Cabang (Wajib untuk Upload Stok) -->
+        <div class="sidebar-stat-card" style="padding: 12px 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 16px;">
+          <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 220px;">
+            <i data-lucide="map-pin" style="width: 16px; height: 16px; color: var(--accent-cyan);"></i>
+            <div>
+              <label for="import-stock-region" style="font-size: 12.5px; font-weight: 700; color: var(--text-primary); display: block;">Wilayah Cabang (Wajib untuk Laporan Stok)</label>
+              <span style="font-size: 11px; color: var(--text-muted);">Kode item Bandung & Cimahi berbeda, jadi wilayah tidak lagi dideteksi otomatis — pilih dulu sebelum unggah berkas stok.</span>
+            </div>
+          </div>
+          <select id="import-stock-region" style="padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid var(--panel-border); background: var(--input-bg); color: var(--text-primary); font-family: inherit; font-size: 13px;">
+            <option value="">-- Pilih Wilayah --</option>
+            <option value="BANDUNG">Bandung</option>
+            <option value="CIMAHI">Cimahi</option>
+          </select>
+        </div>
+
         <!-- 1. Smart Auto-Detect Upload Card -->
         <div class="sidebar-section-title">
           <i data-lucide="sparkles"></i>
@@ -1506,11 +1522,11 @@
 
   <!-- Load internal Javascript Modules (deferred: downloads overlap with
        HTML parsing/CDN scripts above, execution stays in this order) -->
-  <script defer src="data/stock-data.js?v=2.8"></script>
-  <script defer src="js/stock-analytics.js?v=2.8"></script>
-  <script defer src="js/outlet-sorter.js?v=2.8"></script>
-  <script defer src="js/inventory-rebalancer.js?v=2.8"></script>
-  <script defer src="js/app.js?v=2.8"></script>
+  <script defer src="data/stock-data.js?v=2.9"></script>
+  <script defer src="js/stock-analytics.js?v=2.9"></script>
+  <script defer src="js/outlet-sorter.js?v=2.9"></script>
+  <script defer src="js/inventory-rebalancer.js?v=2.9"></script>
+  <script defer src="js/app.js?v=2.9"></script>
 
   <!-- Auto-initialize lucide icons. Deferred scripts above only finish
        running right before DOMContentLoaded, so `lucide` isn't guaranteed to
