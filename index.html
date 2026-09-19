@@ -6,7 +6,7 @@
   <title>Voucher Analytics & Smart Rebalancing - Bee Accounting</title>
   
   <!-- Font & Styling -->
-  <link rel="stylesheet" href="css/style.css?v=3.2">
+  <link rel="stylesheet" href="css/style.css?v=2.6">
   
   <!-- Lucide Icons, Chart.js, SortableJS: deferred so they download in
        parallel with HTML parsing instead of blocking it, while still
@@ -35,25 +35,6 @@
 </head>
 <body>
 
-  <!-- Global region gate: shown once (until a choice is saved to this
-       browser) so every tab is scoped to Bandung/Cimahi/Semua without
-       needing the 5 separate per-tab Wilayah dropdowns to be set by hand.
-       Reused as the "change region" dialog via the sidebar switcher. -->
-  <div id="region-gate-overlay" style="display: none; position: fixed; inset: 0; z-index: 9999; background: rgba(5, 8, 15, 0.96); backdrop-filter: blur(6px); align-items: center; justify-content: center; flex-direction: column; gap: 22px; padding: 24px;">
-    <div style="text-align: center; max-width: 420px;">
-      <i data-lucide="map-pin" style="width: 40px; height: 40px; color: var(--accent-cyan);"></i>
-      <h2 style="color: var(--text-primary); font-size: 20px; margin: 12px 0 6px;">Pilih Wilayah Kerja</h2>
-      <p style="color: var(--text-secondary); font-size: 13px; line-height: 1.5;">
-        Pilihan ini diingat oleh browser ini dan otomatis diterapkan ke semua tab analisa (Matriks Stok, Rebalancing, Coverage, PO, Performa Cabang) — tidak perlu diatur satu-satu lagi. Bisa diganti kapan saja lewat tombol wilayah di sidebar.
-      </p>
-    </div>
-    <div style="display: flex; gap: 12px; flex-wrap: wrap; justify-content: center;">
-      <button type="button" class="btn btn-primary" data-region-choice="BANDUNG" style="padding: 14px 28px; font-size: 14px;">Cabang Bandung</button>
-      <button type="button" class="btn btn-primary" data-region-choice="CIMAHI" style="padding: 14px 28px; font-size: 14px;">Cabang Cimahi</button>
-    </div>
-    <button type="button" class="btn btn-secondary" data-region-choice="ALL" style="padding: 8px 16px; font-size: 12px;">Lihat Semua Wilayah</button>
-  </div>
-
   <div class="app-layout">
     
     <!-- Left Navigation Sidebar -->
@@ -68,17 +49,6 @@
           <span class="brand-sub">Bee Accounting</span>
         </div>
       </div>
-
-      <!-- Global region switcher — drives all 5 per-tab Wilayah filters at
-           once (see js/app.js syncHiddenRegionFilters). Clicking it reopens
-           the same region-gate-overlay used on first visit. -->
-      <button type="button" id="global-region-switcher" style="margin: 0 16px 14px; padding: 8px 12px; background: rgba(255,255,255,0.04); border: 1px solid var(--panel-border); border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer; width: calc(100% - 32px); font-family: inherit;" title="Klik untuk ganti wilayah kerja">
-        <span style="font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 6px;">
-          <i data-lucide="map-pin" style="width: 13px; height: 13px;"></i>
-          Wilayah
-        </span>
-        <span id="global-region-label" style="font-size: 12px; font-weight: 700; color: var(--accent-cyan);">-</span>
-      </button>
 
       <!-- Navigation Section: Modul Analisa -->
       <div class="sidebar-nav-group">
@@ -276,15 +246,6 @@
           </select>
         </div>
 
-        <div class="filter-group" style="display: none;">
-          <label for="stock-region-filter"><i data-lucide="map-pin" style="width: 16px; height: 16px; display: inline; vertical-align: middle;"></i> Wilayah:</label>
-          <select id="stock-region-filter">
-            <option value="ALL">-- Semua Wilayah --</option>
-            <option value="BANDUNG">Bandung</option>
-            <option value="CIMAHI">Cimahi</option>
-          </select>
-        </div>
-
         <div class="filter-group">
           <div class="search-wrapper">
             <i data-lucide="search"></i>
@@ -435,15 +396,6 @@
           </select>
         </div>
 
-        <div class="filter-group" style="display: none;">
-          <label for="rebalance-region-filter"><i data-lucide="map-pin" style="width: 16px; height: 16px; display: inline;"></i> Wilayah:</label>
-          <select id="rebalance-region-filter">
-            <option value="ALL">-- Semua Wilayah --</option>
-            <option value="BANDUNG">Bandung</option>
-            <option value="CIMAHI">Cimahi</option>
-          </select>
-        </div>
-
         <div class="filter-group">
           <div class="search-wrapper">
             <i data-lucide="search"></i>
@@ -519,15 +471,6 @@
           <label for="coverage-category-filter"><i data-lucide="tag" style="width: 16px; height: 16px; display: inline;"></i> Kategori:</label>
           <select id="coverage-category-filter">
             <option value="ALL">-- Semua Kategori --</option>
-          </select>
-        </div>
-
-        <div class="filter-group" style="display: none;">
-          <label for="coverage-region-filter"><i data-lucide="map-pin" style="width: 16px; height: 16px; display: inline;"></i> Wilayah:</label>
-          <select id="coverage-region-filter">
-            <option value="ALL">-- Semua Wilayah --</option>
-            <option value="BANDUNG">Bandung</option>
-            <option value="CIMAHI">Cimahi</option>
           </select>
         </div>
 
@@ -644,15 +587,6 @@
           <label for="po-category-filter"><i data-lucide="tag" style="width: 16px; height: 16px; display: inline;"></i> Kategori:</label>
           <select id="po-category-filter">
             <option value="ALL">-- Semua Kategori --</option>
-          </select>
-        </div>
-
-        <div class="filter-group" style="display: none;">
-          <label for="po-region-filter"><i data-lucide="map-pin" style="width: 16px; height: 16px; display: inline;"></i> Wilayah:</label>
-          <select id="po-region-filter">
-            <option value="ALL">-- Semua Wilayah --</option>
-            <option value="BANDUNG">Bandung</option>
-            <option value="CIMAHI">Cimahi</option>
           </select>
         </div>
 
@@ -1023,15 +957,6 @@
           <label for="outlet-category-filter"><i data-lucide="tag" style="width: 16px; height: 16px; display: inline;"></i> Kategori:</label>
           <select id="outlet-category-filter">
             <option value="ALL">-- Semua Kategori --</option>
-          </select>
-        </div>
-
-        <div class="filter-group" style="display: none;">
-          <label for="outlet-region-filter"><i data-lucide="map-pin" style="width: 16px; height: 16px; display: inline;"></i> Wilayah:</label>
-          <select id="outlet-region-filter">
-            <option value="ALL">-- Semua Wilayah --</option>
-            <option value="BANDUNG">Bandung</option>
-            <option value="CIMAHI">Cimahi</option>
           </select>
         </div>
 
@@ -1430,22 +1355,6 @@
           </button>
         </div>
 
-        <!-- 0b. Wilayah Cabang (Wajib untuk Upload Stok) -->
-        <div class="sidebar-stat-card" style="padding: 12px 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 16px;">
-          <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 220px;">
-            <i data-lucide="map-pin" style="width: 16px; height: 16px; color: var(--accent-cyan);"></i>
-            <div>
-              <label for="import-stock-region" style="font-size: 12.5px; font-weight: 700; color: var(--text-primary); display: block;">Wilayah Cabang (Wajib untuk Laporan Stok)</label>
-              <span style="font-size: 11px; color: var(--text-muted);">Kode item Bandung & Cimahi berbeda, jadi wilayah tidak lagi dideteksi otomatis — pilih dulu sebelum unggah berkas stok.</span>
-            </div>
-          </div>
-          <select id="import-stock-region" style="padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid var(--panel-border); background: var(--input-bg); color: var(--text-primary); font-family: inherit; font-size: 13px;">
-            <option value="">-- Pilih Wilayah --</option>
-            <option value="BANDUNG">Bandung</option>
-            <option value="CIMAHI">Cimahi</option>
-          </select>
-        </div>
-
         <!-- 1. Smart Auto-Detect Upload Card -->
         <div class="sidebar-section-title">
           <i data-lucide="sparkles"></i>
@@ -1514,17 +1423,10 @@
         <!-- Section 3: Riwayat Batch Data -->
         <div class="sidebar-section-title" style="margin-top: 22px;">
           <i data-lucide="history"></i>
-          <span>3. Riwayat Batch Stok, Penjualan & Pembelian</span>
+          <span>3. Riwayat Batch Penjualan & Pembelian</span>
         </div>
 
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 10px;">
-          <div>
-            <span style="font-size: 11px; font-weight: 700; color: var(--accent-cyan); text-transform: uppercase;">Batch Stok</span>
-            <div id="import-history-stock" style="margin-top: 6px; max-height: 260px; overflow-y: auto;">
-              <p style="color: var(--text-muted); font-size: 11.5px;">Memuat data...</p>
-            </div>
-          </div>
-
           <div>
             <span style="font-size: 11px; font-weight: 700; color: var(--accent-purple); text-transform: uppercase;">Batch Penjualan</span>
             <div id="import-history-sales" style="margin-top: 6px; max-height: 260px; overflow-y: auto;">
@@ -1552,11 +1454,11 @@
 
   <!-- Load internal Javascript Modules (deferred: downloads overlap with
        HTML parsing/CDN scripts above, execution stays in this order) -->
-  <script defer src="data/stock-data.js?v=3.2"></script>
-  <script defer src="js/stock-analytics.js?v=3.2"></script>
-  <script defer src="js/outlet-sorter.js?v=3.2"></script>
-  <script defer src="js/inventory-rebalancer.js?v=3.2"></script>
-  <script defer src="js/app.js?v=3.2"></script>
+  <script defer src="data/stock-data.js?v=2.6"></script>
+  <script defer src="js/stock-analytics.js?v=2.6"></script>
+  <script defer src="js/outlet-sorter.js?v=2.6"></script>
+  <script defer src="js/inventory-rebalancer.js?v=2.6"></script>
+  <script defer src="js/app.js?v=2.6"></script>
 
   <!-- Auto-initialize lucide icons. Deferred scripts above only finish
        running right before DOMContentLoaded, so `lucide` isn't guaranteed to

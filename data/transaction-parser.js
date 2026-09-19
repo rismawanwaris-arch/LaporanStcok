@@ -139,7 +139,6 @@ class TransactionParser {
 
       const outlet = StockDataParser.normalizeOutletName(rawOutlet) || rawOutlet;
       if (outlet) outletsSet.add(outlet);
-      const itemCode = StockDataParser.namespaceItemCode(rawItemCode, outlet);
 
       const qty = parseFloat(row['qty'] || row['Qty'] || row['Jumlah'] || 0) || 0;
       const unit = String(row['unit'] || row['Satuan'] || 'PCS').trim();
@@ -163,7 +162,7 @@ class TransactionParser {
         transactionTime: txTime,
         outlet,
         customer,
-        itemCode,
+        itemCode: rawItemCode,
         itemName: rawItemName,
         itemGroup,
         qty: Math.round(qty),
@@ -234,7 +233,6 @@ class TransactionParser {
 
       const outlet = StockDataParser.normalizeOutletName(rawOutlet) || rawOutlet;
       if (outlet) outletsSet.add(outlet);
-      const itemCode = StockDataParser.namespaceItemCode(rawItemCode, outlet);
 
       const vendor = String(row['Vendor'] || row['Supplier'] || '').trim();
       if (vendor) vendorsSet.add(vendor);
@@ -255,7 +253,7 @@ class TransactionParser {
         refInvoice,
         outlet,
         vendor,
-        itemCode,
+        itemCode: rawItemCode,
         itemName: rawItemName,
         qty: Math.round(qty),
         unit,

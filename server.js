@@ -33,7 +33,8 @@ function autoSeedDefaultReports() {
         const csvText = fs.readFileSync(csvPath, 'utf8');
         const reportDate = extractDateFromCSV(csvText, '1308 vcr.csv');
         const parsed = StockDataParser.parse(csvText);
-        db.saveReport(reportDate, '1308 vcr.csv', parsed);
+        const overview = StockAnalytics.getOverview(parsed);
+        db.saveReport(reportDate, '1308 vcr.csv', parsed, overview);
         console.log(`[Seed] Data stok awal disimpan untuk tanggal ${reportDate}!`);
       }
     }
@@ -89,58 +90,6 @@ function extractDateFromCSV(csvText, fallbackFilename) {
   }
 
   return new Date().toISOString().split('T')[0];
-}
-
-/**
- * Bandung and Cimahi use separate item code numbering in Bee Accounting, so
- * the same code (e.g. "001341") can mean two different products depending on
- * region. Auto-detecting the region from outlet names isn't enough to guard
- * against this: uploads are tagged with an explicit user-chosen region
- * instead (see /api/upload), and Cimahi's codes are namespaced with a prefix
- * here so they can never collide with a Bandung item sharing the same raw
- * code, no matter which upload lands first.
- */
-function namespaceItemCodesForRegion(parsedData, region) {
-  if (region !== 'CIMAHI') return parsedData;
-
-  const prefixCode = (code) => StockDataParser.namespaceItemCode(code, 'KALAPA CELL'); // any Cimahi outlet works — forces the prefix
-
-  const namespaced = { allOutlets: parsedData.allOutlets || [], allItems: {}, merks: {} };
-
-  Object.entries(parsedData.merks || {}).forEach(([merkName, merkObj]) => {
-    const items = {};
-    Object.entries(merkObj.items || {}).forEach(([code, item]) => {
-      const newCode = prefixCode(code);
-      items[newCode] = { ...item, code: newCode };
-    });
-    namespaced.merks[merkName] = { ...merkObj, items };
-  });
-
-  Object.entries(parsedData.allItems || {}).forEach(([code, name]) => {
-    namespaced.allItems[prefixCode(code)] = name;
-  });
-
-  return namespaced;
-}
-
-/**
- * Guards against picking the wrong region in the upload dropdown: compares
- * the outlets actually present in the file against the outlets known to
- * belong to the OTHER region. GDG (shared central warehouse) is excluded
- * since it isn't specific to either region.
- */
-function findRegionMismatch(parsedData, expectedRegion) {
-  const outletRegions = new Set(
-    (parsedData.allOutlets || [])
-      .filter((o) => o !== 'GDG')
-      .map((o) => StockDataParser.getOutletRegion(o))
-  );
-  const wrongRegion = Array.from(outletRegions).find((r) => r !== expectedRegion);
-  return wrongRegion || null;
-}
-
-function regionLabel(region) {
-  return region === 'CIMAHI' ? 'Cimahi' : 'Bandung';
 }
 
 // MIME types mapping
@@ -338,12 +287,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && pathname === '/api/upload') {
     readJsonBody(req, res, (payload) => {
       try {
-        const { filename, csvText, fileBase64, customDate, region } = payload;
-
-        if (region !== 'BANDUNG' && region !== 'CIMAHI') {
-          return sendJson(req, res, 400, { success: false, message: 'Pilih wilayah cabang (Bandung/Cimahi) terlebih dahulu sebelum mengunggah laporan stok.' });
-        }
-
+        const { filename, csvText, fileBase64, customDate } = payload;
         let textContent = csvText;
 
         if (!textContent && fileBase64) {
@@ -365,23 +309,14 @@ const server = http.createServer((req, res) => {
           return sendJson(req, res, 400, { success: false, message: 'Format CSV stok tidak dikenali atau kosong.' });
         }
 
-        const mismatch = findRegionMismatch(parsed, region);
-        if (mismatch) {
-          return sendJson(req, res, 400, {
-            success: false,
-            message: `Berkas ini tampaknya berisi outlet wilayah ${regionLabel(mismatch)}, bukan ${regionLabel(region)} yang dipilih. Periksa kembali berkas atau pilihan wilayahnya.`
-          });
-        }
+        const overview = StockAnalytics.getOverview(parsed);
+        const saved = db.saveReport(reportDate, filename || 'upload.csv', parsed, overview);
 
-        const namespaced = namespaceItemCodesForRegion(parsed, region);
-        const saved = db.saveReport(reportDate, filename || 'upload.csv', namespaced);
-
-        console.log(`[Upload Stok] Tersimpan untuk tanggal: ${reportDate} (${filename}) — wilayah: ${regionLabel(region)}`);
+        console.log(`[Upload Stok] Tersimpan untuk tanggal: ${reportDate} (${filename})`);
         return sendJson(req, res, 200, {
           success: true,
-          message: `Laporan stok tanggal ${reportDate} (wilayah ${regionLabel(region)}) berhasil disimpan!`,
+          message: `Laporan stok tanggal ${reportDate} berhasil disimpan!`,
           reportDate,
-          region,
           summary: saved
         });
       } catch (err) {
@@ -551,30 +486,12 @@ const server = http.createServer((req, res) => {
         const reportDate = payload.customDate || extractDateFromCSV(textContent, payload.filename);
         const parsed = StockDataParser.parse(textContent);
         if (parsed.merks && Object.keys(parsed.merks).length > 0) {
-          const region = payload.region;
-          if (region !== 'BANDUNG' && region !== 'CIMAHI') {
-            return sendJson(req, res, 400, {
-              success: false,
-              message: 'Berkas ini terdeteksi sebagai Laporan Stok. Pilih wilayah cabang (Bandung/Cimahi) terlebih dahulu, lalu unggah ulang.'
-            });
-          }
-
-          const mismatch = findRegionMismatch(parsed, region);
-          if (mismatch) {
-            return sendJson(req, res, 400, {
-              success: false,
-              message: `Berkas ini tampaknya berisi outlet wilayah ${regionLabel(mismatch)}, bukan ${regionLabel(region)} yang dipilih. Periksa kembali berkas atau pilihan wilayahnya.`
-            });
-          }
-
-          const namespaced = namespaceItemCodesForRegion(parsed, region);
-          const overview = StockAnalytics.getOverview(namespaced);
-          const saved = db.saveReport(reportDate, payload.filename || 'upload.csv', namespaced);
+          const overview = StockAnalytics.getOverview(parsed);
+          const saved = db.saveReport(reportDate, payload.filename || 'upload.csv', parsed, overview);
           return sendJson(req, res, 200, {
             success: true,
             type: 'stock',
-            message: `Otomatis terdeteksi: Laporan Stok wilayah ${regionLabel(region)} (${overview.global.totalItems} item) tanggal ${reportDate}!`,
-            region,
+            message: `Otomatis terdeteksi: Laporan Stok (${overview.global.totalItems} item) tanggal ${reportDate}!`,
             summary: saved
           });
         }
@@ -593,8 +510,7 @@ const server = http.createServer((req, res) => {
     try {
       const stockDate = parsedUrl.searchParams.get('stockDate') || undefined;
       const days = parseInt(parsedUrl.searchParams.get('days') || '1', 10);
-      const region = parsedUrl.searchParams.get('region') || null;
-      const data = db.getIntegratedData(stockDate, days, region);
+      const data = db.getIntegratedData(stockDate, days);
       return sendJson(req, res, 200, { success: true, data });
     } catch (err) {
       return sendJson(req, res, 500, { success: false, message: err.message });
@@ -606,8 +522,7 @@ const server = http.createServer((req, res) => {
       const stockDate = parsedUrl.searchParams.get('stockDate') || undefined;
       const days = parseInt(parsedUrl.searchParams.get('days') || '1', 10);
       const targetDays = parseInt(parsedUrl.searchParams.get('targetDays') || '7', 10);
-      const region = parsedUrl.searchParams.get('region') || null;
-      const integrated = db.getIntegratedData(stockDate, days, region);
+      const integrated = db.getIntegratedData(stockDate, days);
       const recommendations = InventoryRebalancer.generateTransferRecommendations(integrated, { targetDays });
       return sendJson(req, res, 200, {
         success: true,
@@ -615,8 +530,7 @@ const server = http.createServer((req, res) => {
         salesDates: integrated.salesDates,
         count: recommendations.length,
         recommendations,
-        availableItemGroups: integrated.availableItemGroups,
-        availableRegions: integrated.availableRegions
+        availableItemGroups: integrated.availableItemGroups
       });
     } catch (err) {
       return sendJson(req, res, 500, { success: false, message: err.message });
@@ -628,8 +542,7 @@ const server = http.createServer((req, res) => {
       const stockDate = parsedUrl.searchParams.get('stockDate') || undefined;
       const days = parseInt(parsedUrl.searchParams.get('days') || '1', 10);
       const targetDays = parseInt(parsedUrl.searchParams.get('targetDays') || '14', 10);
-      const region = parsedUrl.searchParams.get('region') || null;
-      const integrated = db.getIntegratedData(stockDate, days, region);
+      const integrated = db.getIntegratedData(stockDate, days);
       const poSuggestions = InventoryRebalancer.generatePOSuggestions(integrated, { targetDays });
       return sendJson(req, res, 200, {
         success: true,
@@ -637,8 +550,7 @@ const server = http.createServer((req, res) => {
         salesDates: integrated.salesDates,
         count: poSuggestions.length,
         suggestions: poSuggestions,
-        availableItemGroups: integrated.availableItemGroups,
-        availableRegions: integrated.availableRegions
+        availableItemGroups: integrated.availableItemGroups
       });
     } catch (err) {
       return sendJson(req, res, 500, { success: false, message: err.message });
@@ -681,8 +593,7 @@ const server = http.createServer((req, res) => {
     try {
       const days = Math.min(180, Math.max(1, parseInt(parsedUrl.searchParams.get('days') || '30', 10)));
       const itemGroup = parsedUrl.searchParams.get('itemGroup') || null;
-      const region = parsedUrl.searchParams.get('region') || null;
-      const data = db.getOutletPerformance(days, itemGroup, region);
+      const data = db.getOutletPerformance(days, itemGroup);
       return sendJson(req, res, 200, { success: true, data });
     } catch (err) {
       return sendJson(req, res, 500, { success: false, message: err.message });
@@ -720,23 +631,6 @@ const server = http.createServer((req, res) => {
       const itemGroupMap = db.getItemGroupByCode();
       const availableItemGroups = db.getDistinctItemGroups();
       return sendJson(req, res, 200, { success: true, itemGroupMap, availableItemGroups });
-    } catch (err) {
-      return sendJson(req, res, 500, { success: false, message: err.message });
-    }
-  }
-
-  // Outlet -> region (Bandung/Cimahi) map — like item-groups above, this has
-  // no data-driven source (Bee Accounting exports don't carry a region
-  // field), so the Matriks Stok Cabang table fetches this once and filters
-  // its (client-side) outlet columns against it.
-  if (req.method === 'GET' && pathname === '/api/analytics/outlet-regions') {
-    try {
-      const cimahiOutlets = Array.from(StockDataParser.CIMAHI_OUTLETS);
-      return sendJson(req, res, 200, {
-        success: true,
-        cimahiOutlets,
-        availableRegions: ['BANDUNG', 'CIMAHI']
-      });
     } catch (err) {
       return sendJson(req, res, 500, { success: false, message: err.message });
     }
