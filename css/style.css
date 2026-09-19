@@ -1165,22 +1165,6 @@ footer a:hover {
   border-radius: 20px;
 }
 
-/* Marks a stock-table row as belonging to Cimahi's own item catalog (CMH-
-   prefixed code) — Bandung and Cimahi assign separate codes per product, so
-   the same-named item can legitimately appear as two rows; this badge makes
-   that look intentional instead of like a duplicate/bug. */
-.badge-region-cimahi {
-  background: rgba(168, 85, 247, 0.12);
-  color: var(--accent-purple);
-  border: 1px solid rgba(168, 85, 247, 0.3);
-  font-size: 10px;
-  font-weight: 700;
-  padding: 1px 6px;
-  border-radius: 20px;
-  margin-left: 4px;
-  white-space: nowrap;
-}
-
 .report-item-meta {
   font-size: 11.5px;
   color: var(--text-secondary);

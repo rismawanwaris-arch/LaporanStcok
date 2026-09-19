@@ -40,64 +40,6 @@ const OUTLET_NAME_MIGRATIONS = {
   'BK7 NAGROG': 'BK 7 NAGROG',
 };
 
-/**
- * Merges a newly-uploaded stock report into whatever was already saved for
- * the same date, instead of the old fully-replace behavior.
- *
- * This matters for shops that export stock as multiple separate CSVs per
- * day (e.g. one per region/branch group — Bandung and Cimahi) rather than
- * one file covering every outlet: uploading the second file for the same
- * date used to wipe out the first file's outlets entirely (saveReport
- * deleted and replaced the whole day's stock_records). Now, for each outlet
- * covered by the NEW upload, old values are dropped and replaced (so a
- * corrected re-upload of the same branch still clears stale numbers); every
- * outlet from a DIFFERENT upload is left untouched.
- */
-function mergeParsedStockData(oldData, newData) {
-  if (!oldData || !oldData.merks) return newData;
-
-  const newOutletSet = new Set(newData.allOutlets || []);
-  const merged = { merks: {}, allOutlets: [], allItems: { ...(oldData.allItems || {}) } };
-
-  // Start from the old data, stripped of any outlet this new upload owns.
-  Object.entries(oldData.merks).forEach(([merkName, merkObj]) => {
-    const items = {};
-    Object.entries(merkObj.items || {}).forEach(([code, item]) => {
-      const stocks = {};
-      Object.entries(item.stocks || {}).forEach(([outlet, qty]) => {
-        if (!newOutletSet.has(outlet)) stocks[outlet] = qty;
-      });
-      items[code] = { code: item.code, name: item.name, stocks };
-    });
-    merged.merks[merkName] = {
-      name: merkObj.name || merkName,
-      outlets: (merkObj.outlets || []).filter(o => !newOutletSet.has(o)),
-      items
-    };
-  });
-
-  // Layer the new upload on top.
-  Object.entries(newData.merks || {}).forEach(([merkName, merkObj]) => {
-    if (!merged.merks[merkName]) {
-      merged.merks[merkName] = { name: merkObj.name || merkName, outlets: [], items: {} };
-    }
-    const target = merged.merks[merkName];
-    (merkObj.outlets || []).forEach(o => { if (!target.outlets.includes(o)) target.outlets.push(o); });
-    Object.entries(merkObj.items || {}).forEach(([code, item]) => {
-      if (!target.items[code]) target.items[code] = { code: item.code, name: item.name, stocks: {} };
-      Object.assign(target.items[code].stocks, item.stocks || {});
-      if (item.name) target.items[code].name = item.name;
-      merged.allItems[code] = item.name;
-    });
-  });
-
-  const outletUnion = new Set();
-  Object.values(merged.merks).forEach(m => (m.outlets || []).forEach(o => outletUnion.add(o)));
-  merged.allOutlets = Array.from(outletUnion);
-
-  return merged;
-}
-
 class StockDatabase {
   constructor(dbPath) {
     this.dbPath = dbPath || process.env.DB_PATH || path.join(__dirname, 'data', 'stock_history.db');
@@ -317,56 +259,32 @@ class StockDatabase {
 
   saveReport(reportDate, filename, parsedData, overview) {
     const now = new Date().toISOString();
-    const newOutlets = parsedData.allOutlets || [];
+    const rawJson = JSON.stringify(parsedData);
+    
+    const totalStock = overview.global.totalStock || 0;
+    const totalItems = overview.global.totalItems || 0;
+    const totalOutlets = overview.global.totalOutlets || 0;
+    const totalMerks = overview.global.totalMerks || 0;
 
-    const existing = this.db.prepare(`SELECT id, raw_json FROM reports WHERE report_date = ?`).get(reportDate);
-
-    // Merge with whatever was already saved for this date (e.g. a second
-    // region's CSV uploaded separately) rather than replacing it outright —
-    // see mergeParsedStockData for why.
-    let oldData = null;
-    if (existing) {
-      try { oldData = JSON.parse(existing.raw_json); } catch (e) { oldData = null; }
-    }
-    const mergedData = oldData ? mergeParsedStockData(oldData, parsedData) : parsedData;
-    const rawJson = JSON.stringify(mergedData);
-
-    // Recomputed from the merged result, not the caller's `overview` (which
-    // only reflects the just-uploaded file) — otherwise the KPI cards would
-    // report only the latest upload's totals after a merge.
-    let totalStock = 0;
-    const merkNames = Object.keys(mergedData.merks || {});
-    merkNames.forEach(merkName => {
-      Object.values(mergedData.merks[merkName].items || {}).forEach(item => {
-        Object.values(item.stocks || {}).forEach(qty => { totalStock += (qty || 0); });
-      });
-    });
-    const totalItems = Object.keys(mergedData.allItems || {}).length;
-    const totalOutlets = (mergedData.allOutlets || []).length;
-    const totalMerks = merkNames.length;
+    const existing = this.db.prepare(`SELECT id FROM reports WHERE report_date = ?`).get(reportDate);
 
     let reportId;
     if (existing) {
       reportId = existing.id;
       this.db.prepare(`
-        UPDATE reports
+        UPDATE reports 
         SET filename = ?, total_stock = ?, total_items = ?, total_outlets = ?, total_merks = ?, raw_json = ?, created_at = ?
         WHERE id = ?
       `).run(filename, totalStock, totalItems, totalOutlets, totalMerks, rawJson, now, reportId);
 
-      // Only clear rows for outlets THIS upload covers — an outlet from a
-      // different upload (e.g. the other region) must survive untouched.
-      if (newOutlets.length > 0) {
-        const placeholders = newOutlets.map(() => '?').join(',');
-        this.db.prepare(`DELETE FROM stock_records WHERE report_id = ? AND outlet IN (${placeholders})`).run(reportId, ...newOutlets);
-      }
+      this.db.prepare(`DELETE FROM stock_records WHERE report_id = ?`).run(reportId);
     } else {
       const insertReport = this.db.prepare(`
         INSERT INTO reports (report_date, filename, total_stock, total_items, total_outlets, total_merks, raw_json, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `);
       insertReport.run(reportDate, filename, totalStock, totalItems, totalOutlets, totalMerks, rawJson, now);
-
+      
       const newRow = this.db.prepare(`SELECT id FROM reports WHERE report_date = ?`).get(reportDate);
       reportId = newRow.id;
     }
@@ -378,9 +296,6 @@ class StockDatabase {
         VALUES (?, ?, ?, ?, ?, ?, ?)
       `);
 
-      // Insert only the NEW upload's rows — the merge above already wrote
-      // the combined picture into raw_json; stock_records for the untouched
-      // region's outlets were left alone by the DELETE above.
       Object.entries(parsedData.merks).forEach(([merkName, merkObj]) => {
         Object.values(merkObj.items).forEach(item => {
           Object.entries(item.stocks).forEach(([outlet, stockQty]) => {
@@ -451,36 +366,26 @@ class StockDatabase {
   // SALES BATCHES & RECORDS
   // ==========================================
 
-  /**
-   * Same-date multi-file uploads (e.g. Bandung's and Cimahi's sales exports
-   * for the same day, uploaded separately) used to wipe each other out: a
-   * second upload for a date that already had a batch deleted ALL of that
-   * batch's rows before inserting its own, discarding the first upload's
-   * outlets entirely. Now the delete is scoped to only the outlets THIS
-   * upload covers (mirroring mergeParsedStockData's approach for stock
-   * reports), and the batch's totals are recomputed from what's actually
-   * left in the table afterward rather than trusting just the new file.
-   */
   saveSalesBatch(batchDate, filename, parsedSales) {
     const now = new Date().toISOString();
     const existing = this.db.prepare(`SELECT id FROM sales_batches WHERE batch_date = ?`).get(batchDate);
-    const newOutlets = Array.from(new Set((parsedSales.uniqueOutlets || []).map(o => normalizeOutletName(o) || o)));
 
     let batchId;
     if (existing) {
       batchId = existing.id;
-      if (newOutlets.length > 0) {
-        const placeholders = newOutlets.map(() => '?').join(',');
-        this.db.prepare(`DELETE FROM sales_records WHERE batch_id = ? AND outlet IN (${placeholders})`).run(batchId, ...newOutlets);
-      } else {
-        this.db.prepare(`DELETE FROM sales_records WHERE batch_id = ?`).run(batchId);
-      }
+      this.db.prepare(`
+        UPDATE sales_batches
+        SET filename = ?, total_rows = ?, total_qty = ?, total_amount = ?, total_profit = ?, total_outlets = ?, created_at = ?
+        WHERE id = ?
+      `).run(filename, parsedSales.totalRows, parsedSales.totalQty, parsedSales.totalAmount, parsedSales.totalProfit, parsedSales.uniqueOutlets.length, now, batchId);
+
+      this.db.prepare(`DELETE FROM sales_records WHERE batch_id = ?`).run(batchId);
     } else {
       const insertBatch = this.db.prepare(`
         INSERT INTO sales_batches (batch_date, filename, total_rows, total_qty, total_amount, total_profit, total_outlets, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `);
-      insertBatch.run(batchDate, filename, 0, 0, 0, 0, 0, now);
+      insertBatch.run(batchDate, filename, parsedSales.totalRows, parsedSales.totalQty, parsedSales.totalAmount, parsedSales.totalProfit, parsedSales.uniqueOutlets.length, now);
 
       const newRow = this.db.prepare(`SELECT id FROM sales_batches WHERE batch_date = ?`).get(batchDate);
       batchId = newRow.id;
@@ -510,29 +415,17 @@ class StockDatabase {
       throw err;
     }
 
-    const totals = this.db.prepare(`
-      SELECT COUNT(*) as totalRows, COALESCE(SUM(qty), 0) as totalQty, COALESCE(SUM(subtotal), 0) as totalAmount,
-             COALESCE(SUM(profit_loss), 0) as totalProfit, COUNT(DISTINCT outlet) as totalOutlets
-      FROM sales_records WHERE batch_id = ?
-    `).get(batchId);
-
-    this.db.prepare(`
-      UPDATE sales_batches
-      SET filename = ?, total_rows = ?, total_qty = ?, total_amount = ?, total_profit = ?, total_outlets = ?, created_at = ?
-      WHERE id = ?
-    `).run(filename, totals.totalRows, totals.totalQty, totals.totalAmount, totals.totalProfit, totals.totalOutlets, now, batchId);
-
     this.backupDatabase();
 
     return {
       id: batchId,
       batchDate,
       filename,
-      totalRows: totals.totalRows,
-      totalQty: totals.totalQty,
-      totalAmount: totals.totalAmount,
-      totalProfit: totals.totalProfit,
-      totalOutlets: totals.totalOutlets,
+      totalRows: parsedSales.totalRows,
+      totalQty: parsedSales.totalQty,
+      totalAmount: parsedSales.totalAmount,
+      totalProfit: parsedSales.totalProfit,
+      totalOutlets: parsedSales.uniqueOutlets.length,
       updated: !!existing
     };
   }
@@ -559,27 +452,26 @@ class StockDatabase {
   // PURCHASE BATCHES & RECORDS
   // ==========================================
 
-  /** Same-date multi-file merge fix — see saveSalesBatch's comment above. */
   savePurchaseBatch(batchDate, filename, parsedPurchases) {
     const now = new Date().toISOString();
     const existing = this.db.prepare(`SELECT id FROM purchase_batches WHERE batch_date = ?`).get(batchDate);
-    const newOutlets = Array.from(new Set((parsedPurchases.uniqueOutlets || []).map(o => normalizeOutletName(o) || o)));
 
     let batchId;
     if (existing) {
       batchId = existing.id;
-      if (newOutlets.length > 0) {
-        const placeholders = newOutlets.map(() => '?').join(',');
-        this.db.prepare(`DELETE FROM purchase_records WHERE batch_id = ? AND outlet IN (${placeholders})`).run(batchId, ...newOutlets);
-      } else {
-        this.db.prepare(`DELETE FROM purchase_records WHERE batch_id = ?`).run(batchId);
-      }
+      this.db.prepare(`
+        UPDATE purchase_batches
+        SET filename = ?, total_rows = ?, total_qty = ?, total_amount = ?, total_outlets = ?, created_at = ?
+        WHERE id = ?
+      `).run(filename, parsedPurchases.totalRows, parsedPurchases.totalQty, parsedPurchases.totalAmount, parsedPurchases.uniqueOutlets.length, now, batchId);
+
+      this.db.prepare(`DELETE FROM purchase_records WHERE batch_id = ?`).run(batchId);
     } else {
       const insertBatch = this.db.prepare(`
         INSERT INTO purchase_batches (batch_date, filename, total_rows, total_qty, total_amount, total_outlets, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
       `);
-      insertBatch.run(batchDate, filename, 0, 0, 0, 0, now);
+      insertBatch.run(batchDate, filename, parsedPurchases.totalRows, parsedPurchases.totalQty, parsedPurchases.totalAmount, parsedPurchases.uniqueOutlets.length, now);
 
       const newRow = this.db.prepare(`SELECT id FROM purchase_batches WHERE batch_date = ?`).get(batchDate);
       batchId = newRow.id;
@@ -608,28 +500,16 @@ class StockDatabase {
       throw err;
     }
 
-    const totals = this.db.prepare(`
-      SELECT COUNT(*) as totalRows, COALESCE(SUM(qty), 0) as totalQty, COALESCE(SUM(subtotal), 0) as totalAmount,
-             COUNT(DISTINCT outlet) as totalOutlets
-      FROM purchase_records WHERE batch_id = ?
-    `).get(batchId);
-
-    this.db.prepare(`
-      UPDATE purchase_batches
-      SET filename = ?, total_rows = ?, total_qty = ?, total_amount = ?, total_outlets = ?, created_at = ?
-      WHERE id = ?
-    `).run(filename, totals.totalRows, totals.totalQty, totals.totalAmount, totals.totalOutlets, now, batchId);
-
     this.backupDatabase();
 
     return {
       id: batchId,
       batchDate,
       filename,
-      totalRows: totals.totalRows,
-      totalQty: totals.totalQty,
-      totalAmount: totals.totalAmount,
-      totalOutlets: totals.totalOutlets,
+      totalRows: parsedPurchases.totalRows,
+      totalQty: parsedPurchases.totalQty,
+      totalAmount: parsedPurchases.totalAmount,
+      totalOutlets: parsedPurchases.uniqueOutlets.length,
       updated: !!existing
     };
   }
@@ -661,10 +541,8 @@ class StockDatabase {
    * @param {string} [stockDate] - Specific stock date or latest
    * @param {number} [daysWindow=1] - Days of sales to consider for ADS
    */
-  getIntegratedData(stockDate, daysWindow = 1, region = null) {
+  getIntegratedData(stockDate, daysWindow = 1) {
     const itemGroupMap = this.getItemGroupByCode();
-    const regionFilter = this.buildRegionFilterSql(region, 'outlet');
-    const regionClause = regionFilter.clause ? ` AND ${regionFilter.clause}` : '';
 
     // 1. Pick stock date
     let targetStockDate = stockDate;
@@ -676,35 +554,34 @@ class StockDatabase {
     // 2. Fetch stock rows for target date
     const stockRows = targetStockDate
       ? this.db.prepare(`
-          SELECT merk, item_code, item_name, outlet, stock
-          FROM stock_records
-          WHERE report_date = ?${regionClause}
-        `).all(targetStockDate, ...regionFilter.params)
+          SELECT merk, item_code, item_name, outlet, stock 
+          FROM stock_records 
+          WHERE report_date = ?
+        `).all(targetStockDate)
       : [];
 
     // 3. Fetch sales aggregation
     // If daysWindow is 1, take sales from latest sales date or all sales dates
     const salesDates = this.db.prepare(`SELECT DISTINCT transaction_date FROM sales_records ORDER BY transaction_date DESC`).all().map(r => r.transaction_date);
     const activeSalesDates = salesDates.slice(0, Math.max(1, daysWindow));
-
+    
     let salesAgg = [];
     if (activeSalesDates.length > 0) {
       const placeholders = activeSalesDates.map(() => '?').join(',');
       salesAgg = this.db.prepare(`
         SELECT item_code, item_name, outlet, SUM(qty) as total_sold, SUM(subtotal) as total_amount, COUNT(DISTINCT transaction_date) as days_active
         FROM sales_records
-        WHERE transaction_date IN (${placeholders})${regionClause}
+        WHERE transaction_date IN (${placeholders})
         GROUP BY item_code, outlet
-      `).all(...activeSalesDates, ...regionFilter.params);
+      `).all(...activeSalesDates);
     }
 
     // 4. Fetch purchase aggregation
     const purchAgg = this.db.prepare(`
       SELECT item_code, item_name, outlet, SUM(qty) as total_purchased, SUM(subtotal) as total_cost
       FROM purchase_records
-      ${regionFilter.clause ? `WHERE ${regionFilter.clause}` : ''}
       GROUP BY item_code, outlet
-    `).all(...regionFilter.params);
+    `).all();
 
     // 5. Build merged map of items and outlets
     const itemsMap = {};
@@ -810,9 +687,7 @@ class StockDatabase {
       totalItemsCount: Object.keys(itemsMap).length,
       allOutlets: Array.from(outletsSet),
       items: itemsMap,
-      availableItemGroups: this.getDistinctItemGroups(),
-      region: region || null,
-      availableRegions: ['BANDUNG', 'CIMAHI']
+      availableItemGroups: this.getDistinctItemGroups()
     };
   }
 
@@ -852,20 +727,6 @@ class StockDatabase {
       WHERE item_group IS NOT NULL AND item_group != ''
       ORDER BY item_group
     `).all().map(r => r.item_group);
-  }
-
-  /**
-   * Builds a SQL fragment + params restricting `outletColumn` to one region
-   * ('BANDUNG' or 'CIMAHI', via StockDataParser.CIMAHI_OUTLETS — see that
-   * file for why this is a hardcoded list rather than derived from data).
-   * Returns an empty clause for any other value (no region filter).
-   */
-  buildRegionFilterSql(region, outletColumn) {
-    const cimahiOutlets = Array.from(StockDataParser.CIMAHI_OUTLETS);
-    const placeholders = cimahiOutlets.map(() => '?').join(',');
-    if (region === 'CIMAHI') return { clause: `${outletColumn} IN (${placeholders})`, params: cimahiOutlets };
-    if (region === 'BANDUNG') return { clause: `${outletColumn} NOT IN (${placeholders})`, params: cimahiOutlets };
-    return { clause: '', params: [] };
   }
 
   getStockoutHistory(days = 30, chronicThresholdPct = 20) {
@@ -1115,10 +976,7 @@ class StockDatabase {
    *   Only applies to the sales-side numbers — stock and stockout rate aren't
    *   category-aware since that field only exists on sales_records.
    */
-  getOutletPerformance(days = 30, itemGroup = null, region = null) {
-    const regionFilter = this.buildRegionFilterSql(region, 'outlet');
-    const regionClause = regionFilter.clause ? ` AND ${regionFilter.clause}` : '';
-
+  getOutletPerformance(days = 30, itemGroup = null) {
     const salesDates = this.db.prepare(`
       SELECT DISTINCT transaction_date FROM sales_records ORDER BY transaction_date DESC LIMIT ?
     `).all(days).map(r => r.transaction_date);
@@ -1127,12 +985,12 @@ class StockDatabase {
     if (salesDates.length > 0) {
       const placeholders = salesDates.map(() => '?').join(',');
       const groupClause = itemGroup ? 'AND item_group = ?' : '';
-      const params = itemGroup ? [...salesDates, itemGroup, ...regionFilter.params] : [...salesDates, ...regionFilter.params];
+      const params = itemGroup ? [...salesDates, itemGroup] : salesDates;
       salesRows = this.db.prepare(`
         SELECT outlet, SUM(subtotal) as revenue, SUM(profit_loss) as profit, SUM(qty) as qty,
                COUNT(DISTINCT transaction_no) as tx_count
         FROM sales_records
-        WHERE transaction_date IN (${placeholders}) ${groupClause}${regionClause}
+        WHERE transaction_date IN (${placeholders}) ${groupClause}
         GROUP BY outlet
       `).all(...params);
     }
@@ -1143,9 +1001,9 @@ class StockDatabase {
       stockRows = this.db.prepare(`
         SELECT outlet, SUM(stock) as total_stock, COUNT(DISTINCT item_code) as item_count
         FROM stock_records
-        WHERE report_date = ?${regionClause}
+        WHERE report_date = ?
         GROUP BY outlet
-      `).all(latest.report_date, ...regionFilter.params);
+      `).all(latest.report_date);
     }
 
     // Stockout rate per outlet: reuses the same "no stock_records row on a
@@ -1158,8 +1016,8 @@ class StockDatabase {
     if (reportDates.length > 0) {
       const placeholders = reportDates.map(() => '?').join(',');
       stockoutRows = this.db.prepare(`
-        SELECT report_date, outlet, item_code FROM stock_records WHERE report_date IN (${placeholders})${regionClause}
-      `).all(...reportDates, ...regionFilter.params);
+        SELECT report_date, outlet, item_code FROM stock_records WHERE report_date IN (${placeholders})
+      `).all(...reportDates);
     }
     const outletItemDays = {}; // outlet -> item_code -> Set(reportDatesInStock)
     stockoutRows.forEach(r => {
@@ -1217,8 +1075,6 @@ class StockDatabase {
     return {
       days,
       itemGroup: itemGroup || null,
-      region: region || null,
-      availableRegions: ['BANDUNG', 'CIMAHI'],
       salesDatesCount: salesDates.length,
       totalNetworkRevenue: Math.round(totalNetworkRevenue),
       avgStockoutRate: +avgStockoutRate.toFixed(1),

@@ -28,17 +28,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // since init() synchronously wires each tab's sortable headers.
   const columnSortState = {};
 
-  // Declared here (ahead of init(), same TDZ reason as columnSortState
-  // above) since initRegionGate() reads these synchronously during init().
-  const GLOBAL_REGION_KEY = 'activeRegion';
-  const REGION_FILTER_IDS = [
-    'stock-region-filter',
-    'rebalance-region-filter',
-    'coverage-region-filter',
-    'po-region-filter',
-    'outlet-region-filter'
-  ];
-
   let virtualTable = {
     items: [],
     filteredItems: [],
@@ -61,15 +50,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // item_code -> item_group ("VOUCHER"/"PETSHOP"/etc.), derived from sales
     // history. The stock CSV itself has no category column, so this is
     // fetched once separately and cross-referenced when filtering the table.
-    itemGroupMap: {},
-    // Outlet names belonging to the Cimahi region (everything else is
-    // Bandung) — hardcoded server-side (see StockDataParser.CIMAHI_OUTLETS),
-    // fetched once so the Matriks Stok Cabang tab can filter its outlet
-    // columns by region client-side.
-    cimahiOutlets: new Set(),
-    // 'BANDUNG' | 'CIMAHI' | 'ALL' — set once via the region gate/switcher
-    // and mirrored into the 5 hidden per-tab selects (see initRegionGate).
-    globalRegion: null
+    itemGroupMap: {}
   };
 
   // DOM Elements
@@ -117,74 +98,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // Check backend API and database first, fallback to static CSV
     checkBackendAndLoad();
     loadItemGroupMap();
-    loadOutletRegionMap();
-
-    // Must run after the setup*Controls() calls above so their region-filter
-    // change listeners already exist by the time this dispatches 'change' on
-    // the (now hidden) per-tab selects.
-    initRegionGate();
-  }
-
-  // Every tab used to need its own "Wilayah" dropdown set by hand, which was
-  // easy to leave inconsistent across tabs. Now there's a single global
-  // choice (remembered in this browser via localStorage) that drives all 5
-  // per-tab selects at once — see syncHiddenRegionFilters. The selects stay
-  // in the DOM (just hidden via CSS) so every existing region-filter change
-  // handler keeps working unchanged.
-  function syncHiddenRegionFilters(region) {
-    REGION_FILTER_IDS.forEach(id => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      el.value = region;
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-
-    // Convenience default for the stock-upload region picker — still
-    // independently changeable, since upload correctness matters more than
-    // view convenience (e.g. you might be viewing Cimahi but uploading a
-    // Bandung file).
-    const importRegionSel = document.getElementById('import-stock-region');
-    if (importRegionSel && (region === 'BANDUNG' || region === 'CIMAHI')) {
-      importRegionSel.value = region;
-    }
-  }
-
-  function updateGlobalRegionLabel(region) {
-    const label = document.getElementById('global-region-label');
-    if (!label) return;
-    label.textContent = region === 'BANDUNG' ? 'Bandung' : region === 'CIMAHI' ? 'Cimahi' : 'Semua';
-  }
-
-  function applyGlobalRegion(region) {
-    localStorage.setItem(GLOBAL_REGION_KEY, region);
-    appState.globalRegion = region;
-    syncHiddenRegionFilters(region);
-    updateGlobalRegionLabel(region);
-    const overlay = document.getElementById('region-gate-overlay');
-    if (overlay) overlay.style.display = 'none';
-  }
-
-  function initRegionGate() {
-    const overlay = document.getElementById('region-gate-overlay');
-    if (overlay) {
-      overlay.querySelectorAll('[data-region-choice]').forEach(btn => {
-        btn.addEventListener('click', () => applyGlobalRegion(btn.dataset.regionChoice));
-      });
-    }
-
-    const switcher = document.getElementById('global-region-switcher');
-    if (switcher) {
-      switcher.addEventListener('click', () => {
-        if (overlay) overlay.style.display = 'flex';
-      });
-    }
-
-    const saved = localStorage.getItem(GLOBAL_REGION_KEY);
-    if (saved) {
-      applyGlobalRegion(saved);
-    } else if (overlay) {
-      overlay.style.display = 'flex';
-    }
   }
 
   // Fetches the item_code -> item_group (category) map derived from sales
@@ -201,24 +114,6 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (e) {
       console.warn('Gagal memuat pemetaan kategori item (mode lokal/offline?)', e);
     }
-  }
-
-  // Fetches the Cimahi outlet list once, used by getOutletRegion() below to
-  // classify every outlet as BANDUNG or CIMAHI for the "Wilayah" filters.
-  async function loadOutletRegionMap() {
-    try {
-      const res = await fetch('/api/analytics/outlet-regions');
-      const json = await res.json();
-      if (json.success) {
-        appState.cimahiOutlets = new Set(json.cimahiOutlets || []);
-      }
-    } catch (e) {
-      console.warn('Gagal memuat pemetaan wilayah outlet (mode lokal/offline?)', e);
-    }
-  }
-
-  function getOutletRegion(outlet) {
-    return appState.cimahiOutlets.has(outlet) ? 'CIMAHI' : 'BANDUNG';
   }
 
   // 1. Check Backend API and Load Dates History
@@ -593,14 +488,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (categoryFilter) {
       categoryFilter.addEventListener('change', filterTableRows);
     }
-
-    // Unlike Kategori (filters which item ROWS show), Wilayah changes which
-    // outlet COLUMNS exist — needs the header/totals rebuilt, not just the
-    // visible row window re-filtered.
-    const regionFilter = document.getElementById('stock-region-filter');
-    if (regionFilter) {
-      regionFilter.addEventListener('change', renderTableAndCharts);
-    }
   }
 
   function onMerkChanged() {
@@ -630,19 +517,10 @@ document.addEventListener('DOMContentLoaded', () => {
     return appState.parsedData.merks[appState.activeMerk];
   }
 
-  // Applies the "Wilayah" (Bandung/Cimahi) filter to an outlet list — shared
-  // by renderTableAndCharts and renderTable's own fallback so both the table
-  // columns and the charts stay in sync regardless of call path.
-  function filterOutletsByRegion(outlets) {
-    const region = document.getElementById('stock-region-filter')?.value || 'ALL';
-    if (region === 'ALL') return outlets;
-    return outlets.filter(o => getOutletRegion(o) === region);
-  }
-
   function renderTableAndCharts() {
     const merkData = getActiveMerkData();
     if (!merkData) return;
-    const outlets = filterOutletsByRegion(OutletSorter.sortOutlets(merkData.outlets, appState.activeMerk));
+    const outlets = OutletSorter.sortOutlets(merkData.outlets, appState.activeMerk);
     renderTable(merkData, outlets);
     renderCharts(merkData, outlets);
   }
@@ -672,7 +550,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!merkData) return;
     }
     if (!outlets) {
-      outlets = filterOutletsByRegion(OutletSorter.sortOutlets(merkData.outlets, appState.activeMerk));
+      outlets = OutletSorter.sortOutlets(merkData.outlets, appState.activeMerk);
     }
 
     const items = Object.values(merkData.items);
@@ -760,14 +638,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const itemGroup = appState.itemGroupMap[item.code];
-    const isCimahiItem = item.code.startsWith('CMH-');
 
     return `
       <tr data-item-code="${escapeHtml(item.code)}" data-item-name="${escapeHtml(item.name.toLowerCase())}">
         <td>
-          <div style="font-weight: 600; color: var(--text-primary); white-space: normal; min-width: 220px;">
-            ${escapeHtml(item.name)}${isCimahiItem ? ' <span class="badge-region-cimahi">Cimahi</span>' : ''}
-          </div>
+          <div style="font-weight: 600; color: var(--text-primary); white-space: normal; min-width: 220px;">${escapeHtml(item.name)}</div>
           <div style="font-size: 11px; color: var(--text-muted);">${escapeHtml(item.code)}${itemGroup ? ` &bull; ${escapeHtml(itemGroup)}` : ''}</div>
         </td>
         ${cellsHtml}
@@ -1617,9 +1492,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (window.lucide) lucide.createIcons();
 
       const days = document.getElementById('rebalance-days-filter')?.value || '1';
-      const region = document.getElementById('rebalance-region-filter')?.value || 'ALL';
-      const regionParam = region !== 'ALL' ? `&region=${encodeURIComponent(region)}` : '';
-      const url = `/api/analytics/rebalancing?stockDate=${encodeURIComponent(appState.currentDate || '')}&days=${encodeURIComponent(days)}${regionParam}`;
+      const url = `/api/analytics/rebalancing?stockDate=${encodeURIComponent(appState.currentDate || '')}&days=${encodeURIComponent(days)}`;
       const res = await fetch(url);
       const json = await res.json();
 
@@ -1742,12 +1615,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnExport = document.getElementById('btn-export-rebalance');
 
     const categoryFilter = document.getElementById('rebalance-category-filter');
-    const regionFilter = document.getElementById('rebalance-region-filter');
 
     initSortableTable('rebalance-table-body', renderRebalanceTable);
 
     if (daysFilter) daysFilter.addEventListener('change', loadRebalanceData);
-    if (regionFilter) regionFilter.addEventListener('change', loadRebalanceData);
     if (urgencyFilter) urgencyFilter.addEventListener('change', renderRebalanceTable);
     if (merkFilter) merkFilter.addEventListener('change', renderRebalanceTable);
     if (categoryFilter) categoryFilter.addEventListener('change', renderRebalanceTable);
@@ -1797,9 +1668,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (window.lucide) lucide.createIcons();
 
       const days = document.getElementById('coverage-days-filter')?.value || '1';
-      const region = document.getElementById('coverage-region-filter')?.value || 'ALL';
-      const regionParam = region !== 'ALL' ? `&region=${encodeURIComponent(region)}` : '';
-      const url = `/api/analytics/integrated?stockDate=${encodeURIComponent(appState.currentDate || '')}&days=${encodeURIComponent(days)}${regionParam}`;
+      const url = `/api/analytics/integrated?stockDate=${encodeURIComponent(appState.currentDate || '')}&days=${encodeURIComponent(days)}`;
       const res = await fetch(url);
       const json = await res.json();
 
@@ -1897,13 +1766,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnExport = document.getElementById('btn-export-coverage');
 
     const categoryFilter = document.getElementById('coverage-category-filter');
-    const regionFilter = document.getElementById('coverage-region-filter');
 
     initSortableTable('coverage-table-body', renderCoverageTable);
     setupVirtualScroll('coverage-table-body', 8, buildCoverageRowHtml);
 
     if (daysFilter) daysFilter.addEventListener('change', loadCoverageData);
-    if (regionFilter) regionFilter.addEventListener('change', loadCoverageData);
     if (statusFilter) statusFilter.addEventListener('change', renderCoverageTable);
     if (categoryFilter) categoryFilter.addEventListener('change', renderCoverageTable);
     if (searchInput) searchInput.addEventListener('input', renderCoverageTable);
@@ -1950,9 +1817,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (window.lucide) lucide.createIcons();
 
       const days = document.getElementById('po-days-filter')?.value || '1';
-      const region = document.getElementById('po-region-filter')?.value || 'ALL';
-      const regionParam = region !== 'ALL' ? `&region=${encodeURIComponent(region)}` : '';
-      const url = `/api/analytics/po?stockDate=${encodeURIComponent(appState.currentDate || '')}&days=${encodeURIComponent(days)}${regionParam}`;
+      const url = `/api/analytics/po?stockDate=${encodeURIComponent(appState.currentDate || '')}&days=${encodeURIComponent(days)}`;
       const res = await fetch(url);
       const json = await res.json();
 
@@ -2056,12 +1921,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnExport = document.getElementById('btn-export-po');
 
     const categoryFilter = document.getElementById('po-category-filter');
-    const regionFilter = document.getElementById('po-region-filter');
 
     initSortableTable('po-table-body', renderPOTable);
 
     if (daysFilter) daysFilter.addEventListener('change', loadPOData);
-    if (regionFilter) regionFilter.addEventListener('change', loadPOData);
 
     if (merkFilter) merkFilter.addEventListener('change', renderPOTable);
     if (categoryFilter) categoryFilter.addEventListener('change', renderPOTable);
@@ -2458,9 +2321,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const days = document.getElementById('outlet-days-filter')?.value || 30;
       const category = document.getElementById('outlet-category-filter')?.value || 'ALL';
       const categoryParam = category !== 'ALL' ? `&itemGroup=${encodeURIComponent(category)}` : '';
-      const region = document.getElementById('outlet-region-filter')?.value || 'ALL';
-      const regionParam = region !== 'ALL' ? `&region=${encodeURIComponent(region)}` : '';
-      const res = await fetch(`/api/analytics/outlet-performance?days=${encodeURIComponent(days)}${categoryParam}${regionParam}`);
+      const res = await fetch(`/api/analytics/outlet-performance?days=${encodeURIComponent(days)}${categoryParam}`);
       const json = await res.json();
 
       if (!json.success || !json.data) throw new Error(json.message || 'Gagal mengambil data performa cabang');
@@ -2536,7 +2397,6 @@ document.addEventListener('DOMContentLoaded', () => {
   function setupOutletPerformanceControls() {
     const daysFilter = document.getElementById('outlet-days-filter');
     const categoryFilter = document.getElementById('outlet-category-filter');
-    const regionFilter = document.getElementById('outlet-region-filter');
     const statusFilter = document.getElementById('outlet-status-filter');
     const searchInput = document.getElementById('outlet-search-input');
     const btnExport = document.getElementById('btn-export-outlet');
@@ -2545,7 +2405,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (daysFilter) daysFilter.addEventListener('change', loadOutletPerformanceData);
     if (categoryFilter) categoryFilter.addEventListener('change', loadOutletPerformanceData);
-    if (regionFilter) regionFilter.addEventListener('change', loadOutletPerformanceData);
     if (statusFilter) statusFilter.addEventListener('change', renderOutletTable);
     if (searchInput) searchInput.addEventListener('input', renderOutletTable);
 
@@ -2985,17 +2844,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function uploadSpecificFile(file, endpoint, label) {
     const customDate = document.getElementById('import-custom-date')?.value || '';
-    const stockRegion = document.getElementById('import-stock-region')?.value || '';
-
-    // Stock uploads carry their own item-code space per region (Bandung vs
-    // Cimahi), so the region is required upfront instead of being guessed
-    // from outlet names — picking the wrong one would let the server confuse
-    // two different products that happen to share a code across regions.
-    if (endpoint === '/api/upload' && !stockRegion) {
-      alert('Pilih wilayah cabang (Bandung/Cimahi) terlebih dahulu sebelum mengunggah laporan stok.');
-      return;
-    }
-
     showStatus(
       customDate
         ? `Mengunggah berkas ${label}: "${file.name}" untuk tanggal ${formatDateDisplay(customDate)}...`
@@ -3010,9 +2858,6 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         let payload = { filename: file.name };
         if (customDate) payload.customDate = customDate;
-        if (stockRegion && (endpoint === '/api/upload' || endpoint === '/api/upload-auto')) {
-          payload.region = stockRegion;
-        }
 
         if (isBinaryExcel) {
           payload.fileBase64 = e.target.result;
@@ -3054,35 +2899,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function loadImportBatches() {
-    const stockContainer = document.getElementById('import-history-stock');
     const salesContainer = document.getElementById('import-history-sales');
     const purchContainer = document.getElementById('import-history-purchases');
-
-    // 0. Stock Reports
-    if (stockContainer) {
-      try {
-        const res = await fetch('/api/dates');
-        const json = await res.json();
-        if (json.success && json.dates.length > 0) {
-          stockContainer.innerHTML = json.dates.map(d => `
-            <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 8px; margin-bottom: 8px; font-size: 12px;">
-              <div>
-                <strong style="color: var(--text-primary);">${d.report_date}</strong>
-                <span style="color: var(--text-secondary); margin-left: 8px;">(${d.total_items.toLocaleString('id-ID')} item, ${d.total_stock.toLocaleString('id-ID')} pcs, ${d.total_outlets} outlet)</span>
-                <div style="color: var(--text-muted); font-size: 11px;">Berkas: ${escapeHtml(d.filename || '-')}</div>
-              </div>
-              <button class="btn-mini-danger" style="padding: 4px 8px; font-size: 11px;" onclick="window._deleteBatch('stock', '${d.report_date}')">
-                Hapus
-              </button>
-            </div>
-          `).join('');
-        } else {
-          stockContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 12px;">Belum ada riwayat stok yang diimpor.</p>';
-        }
-      } catch (e) {
-        stockContainer.innerHTML = `<p style="color: var(--status-danger); font-size: 12px;">Gagal memuat: ${e.message}</p>`;
-      }
-    }
 
     // 1. Sales Batches
     if (salesContainer) {
@@ -3141,9 +2959,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window._deleteBatch = async function(type, date) {
     if (!confirm(`Hapus batch ${type} untuk tanggal ${date}?`)) return;
     try {
-      const endpoint = type === 'stock' ? `/api/report?date=${date}`
-        : type === 'sales' ? `/api/sales?date=${date}`
-        : `/api/purchases?date=${date}`;
+      const endpoint = type === 'sales' ? `/api/sales?date=${date}` : `/api/purchases?date=${date}`;
       const res = await fetch(endpoint, { method: 'DELETE' });
       const json = await res.json();
       if (json.success) {
@@ -3151,7 +2967,6 @@ document.addEventListener('DOMContentLoaded', () => {
         loadImportBatches();
         loadRebalanceData();
         loadPOData();
-        if (type === 'stock') checkBackendAndLoad();
       } else {
         alert(json.message || 'Gagal menghapus batch');
       }

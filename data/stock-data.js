@@ -111,44 +111,10 @@ class StockDataParser {
       'SA SUKAASIH': 'SA',
       'SS (C)': 'SS',
       'SS SINDANG SARI': 'SS',
-      'PETSHOP': 'PETSHOP',
-      // Cimahi KBB branches (separate stock report from the main Bandung
-      // outlets above) — normalized to consistent all-caps so they render
-      // the same way as every other outlet instead of mixed-case.
-      'Kalapa Cell': 'KALAPA CELL',
-      'Permata Cell': 'PERMATA CELL',
-      'Rawa Cell': 'RAWA CELL'
+      'PETSHOP': 'PETSHOP'
     };
 
     return map[name] || name;
-  }
-
-  /**
-   * Outlets belonging to the Cimahi KBB region — everything else (the
-   * Bandung-area branches) falls through to the default. There is no way to
-   * derive region from the data itself (Bee Accounting exports don't carry
-   * it), so this is a hardcoded lookup, kept next to normalizeOutletName's
-   * own hardcoded outlet list for the same reason.
-   */
-  static CIMAHI_OUTLETS = new Set(['KALAPA CELL', 'PERMATA CELL', 'RAWA CELL']);
-
-  static getOutletRegion(outletName) {
-    return this.CIMAHI_OUTLETS.has(outletName) ? 'CIMAHI' : 'BANDUNG';
-  }
-
-  /**
-   * Bandung and Cimahi assign item codes independently, so the same raw code
-   * can mean two different products depending on region (see server.js's
-   * namespaceItemCodesForRegion for the stock-upload case). This is the
-   * per-row equivalent, used by TransactionParser for sales/purchase records
-   * where each row already carries its own outlet — the region is derived
-   * from that outlet instead of needing a separate manual selection.
-   */
-  static CIMAHI_ITEM_CODE_PREFIX = 'CMH-';
-
-  static namespaceItemCode(code, outletName) {
-    if (!code || code.startsWith(this.CIMAHI_ITEM_CODE_PREFIX)) return code;
-    return this.getOutletRegion(outletName) === 'CIMAHI' ? `${this.CIMAHI_ITEM_CODE_PREFIX}${code}` : code;
   }
 
   /**
