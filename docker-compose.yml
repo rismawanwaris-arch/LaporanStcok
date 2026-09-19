@@ -45,3 +45,50 @@ services:
       category: Productivity
       developer: Antigravity
       author: User
+
+  # Bandung (~40+ outlets) and Cimahi (~3 outlets) use completely different
+  # item-code catalogs — merging them into one database was tried and
+  # reverted (see git history) because item codes collided across regions
+  # in ways that silently corrupted data. This runs the exact same,
+  # unmodified application image as a second instance with its own database
+  # and port, so the two regions can never share state at all.
+  app-cimahi:
+    container_name: laporan-stock-cimahi-app
+    image: laporan-stock:latest
+    restart: unless-stopped
+    ports:
+      - "3501:3000"
+    environment:
+      - PORT=3000
+      - HOST=0.0.0.0
+      - DB_PATH=/app/data/stock_history.db
+    volumes:
+      - ./data-cimahi:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/api/dates', (res) => process.exit(res.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    x-casaos:
+      envs:
+        - container: PORT
+          description:
+            en_us: Web Application Port
+            id_id: Port Aplikasi Web
+      ports:
+        - container: "3000"
+          description:
+            en_us: Web UI (Port 3501)
+            id_id: Tampilan Web (Port 3501)
+      volumes:
+        - container: /app/data
+          description:
+            en_us: SQLite Database & Stock CSVs (Cimahi)
+            id_id: Database SQLite & Data Laporan Stok (Cimahi)
+      title:
+        en_us: Voucher Stock Analytics (Cimahi)
+        id_id: Analisa Stok Voucher (Cimahi)
+      icon: https://cdn-icons-png.flaticon.com/512/2920/2920349.png
+      category: Productivity
+      developer: Antigravity
+      author: User

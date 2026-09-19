@@ -15,8 +15,11 @@ yarn-error.log*
 
 # Automatic local database backups (rotated copies next to the live .db —
 # not meant to live in git; download a real backup via the app's "Unduh
-# Cadangan" button or copy data/stock_history.db somewhere safe instead)
+# Cadangan" button or copy data/stock_history.db somewhere safe instead).
+# Cimahi runs as a separate deployment (see docker-compose.yml) with its own
+# data-cimahi/ directory, so its backups need the same rule.
 data/backups/
+data-cimahi/backups/
 
 # Operating System files
 Thumbs.db
