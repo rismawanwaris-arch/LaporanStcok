@@ -14,6 +14,7 @@ services:
       - PORT=3000
       - HOST=0.0.0.0
       - DB_PATH=/app/data/stock_history.db
+      - SITE_NAME=Cabang Bandung
     volumes:
       # Data persisten database SQLite di host ZimaOS
       - ./data:/app/data
@@ -73,6 +74,7 @@ services:
       - PORT=3000
       - HOST=0.0.0.0
       - DB_PATH=/app/db/stock_history.db
+      - SITE_NAME=Cabang Cimahi
     volumes:
       - ./data-cimahi:/app/db
     healthcheck:

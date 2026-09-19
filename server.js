@@ -264,6 +264,14 @@ const server = http.createServer((req, res) => {
 
   // --- API ROUTES ---
 
+  // Lets the frontend label itself per deployment instance (e.g. "Cabang
+  // Bandung" vs "Cabang Cimahi" — both instances run this exact same image,
+  // see docker-compose.yml, so the label has to come from an env var rather
+  // than anything baked into the code).
+  if (req.method === 'GET' && pathname === '/api/config') {
+    return sendJson(req, res, 200, { success: true, siteName: process.env.SITE_NAME || 'Bee Accounting' });
+  }
+
   // 1. Stock Dates & Data
   if (req.method === 'GET' && pathname === '/api/dates') {
     try {
