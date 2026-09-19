@@ -712,9 +712,27 @@ const server = http.createServer((req, res) => {
           return sendJson(req, res, 400, { success: false, message: 'Format berkas harus berupa file database SQLite (.db).' });
         }
 
-        db.close();
-        fs.writeFileSync(db.dbPath, buffer);
+        // Write to a temp file and verify it actually opens as SQLite before
+        // touching the live connection. Writing straight to db.dbPath right
+        // after closing the live handle left the server permanently broken
+        // (every subsequent query throwing on the closed connection) if the
+        // write or reopen failed partway, with no path back to a working
+        // connection short of a manual restart.
         const { DatabaseSync } = require('node:sqlite');
+        const tempPath = `${db.dbPath}.restore-tmp-${Date.now()}`;
+        fs.writeFileSync(tempPath, buffer);
+
+        try {
+          const tempDb = new DatabaseSync(tempPath);
+          tempDb.prepare('SELECT name FROM sqlite_master LIMIT 1').get();
+          tempDb.close();
+        } catch (verifyErr) {
+          fs.unlinkSync(tempPath);
+          return sendJson(req, res, 400, { success: false, message: 'Berkas database tidak valid: ' + verifyErr.message });
+        }
+
+        db.close();
+        fs.renameSync(tempPath, db.dbPath);
         db.db = new DatabaseSync(db.dbPath);
         db.initSchema();
 
