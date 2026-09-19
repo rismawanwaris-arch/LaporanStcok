@@ -481,13 +481,42 @@ document.addEventListener('DOMContentLoaded', () => {
 
     searchInput.addEventListener('input', (e) => {
       appState.searchQuery = e.target.value.toLowerCase().trim();
-      filterTableRows();
+      applyTableAndChartFilters();
     });
 
     const categoryFilter = document.getElementById('stock-category-filter');
     if (categoryFilter) {
-      categoryFilter.addEventListener('change', filterTableRows);
+      categoryFilter.addEventListener('change', applyTableAndChartFilters);
     }
+  }
+
+  // Re-renders both the table (via filterTableRows) and the two charts above
+  // it so Kategori/search stay in sync everywhere — previously only the
+  // table respected these filters while the charts kept showing the whole
+  // active merk's data regardless of category or search text.
+  function applyTableAndChartFilters() {
+    filterTableRows();
+    const merkData = getActiveMerkData();
+    if (!merkData) return;
+    const outlets = OutletSorter.sortOutlets(merkData.outlets, appState.activeMerk);
+    renderCharts(getFilteredMerkDataForCharts(merkData), outlets);
+  }
+
+  // Applies the same Kategori + search matching that filterTableRows() uses
+  // for the table, but to a merkData-shaped object so renderCharts() (which
+  // reads merkData.items directly) shows a consistent picture.
+  function getFilteredMerkDataForCharts(merkData) {
+    const q = appState.searchQuery;
+    const categoryFilter = document.getElementById('stock-category-filter')?.value || 'ALL';
+    if (categoryFilter === 'ALL' && !q) return merkData;
+
+    const items = {};
+    Object.entries(merkData.items).forEach(([code, item]) => {
+      if (categoryFilter !== 'ALL' && (appState.itemGroupMap[code] || 'LAINNYA') !== categoryFilter) return;
+      if (q && !code.toLowerCase().includes(q) && !item.name.toLowerCase().includes(q)) return;
+      items[code] = item;
+    });
+    return { ...merkData, items };
   }
 
   function onMerkChanged() {
@@ -522,7 +551,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!merkData) return;
     const outlets = OutletSorter.sortOutlets(merkData.outlets, appState.activeMerk);
     renderTable(merkData, outlets);
-    renderCharts(merkData, outlets);
+    renderCharts(getFilteredMerkDataForCharts(merkData), outlets);
   }
 
   function clearUI() {
@@ -1139,7 +1168,8 @@ document.addEventListener('DOMContentLoaded', () => {
       
       // Update Chart.js colors if charts are active
       if (appState.parsedData && appState.activeMerk) {
-        renderCharts();
+        const merkData = getActiveMerkData();
+        if (merkData) renderCharts(getFilteredMerkDataForCharts(merkData));
       }
     }
   }
