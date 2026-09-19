@@ -52,6 +52,17 @@ services:
   # in ways that silently corrupted data. This runs the exact same,
   # unmodified application image as a second instance with its own database
   # and port, so the two regions can never share state at all.
+  #
+  # /app/data (inside the image) holds application source — database.js
+  # requires './data/stock-data' and './data/transaction-parser' relative to
+  # its own location, so that path always has to resolve to the code copied
+  # in by the Dockerfile's `COPY data/ ./data/`. The `app` service above
+  # only gets away with mounting a volume there because its host ./data
+  # folder is the same git checkout and happens to already contain those
+  # same source files alongside the database — mounting a real empty data
+  # directory over /app/data (as this service originally did) shadows the
+  # code and crash-loops the container with MODULE_NOT_FOUND. Mounting to a
+  # separate path and pointing DB_PATH at it avoids that entirely.
   app-cimahi:
     container_name: laporan-stock-cimahi-app
     image: laporan-stock:latest
@@ -61,9 +72,9 @@ services:
     environment:
       - PORT=3000
       - HOST=0.0.0.0
-      - DB_PATH=/app/data/stock_history.db
+      - DB_PATH=/app/db/stock_history.db
     volumes:
-      - ./data-cimahi:/app/data
+      - ./data-cimahi:/app/db
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/api/dates', (res) => process.exit(res.statusCode === 200 ? 0 : 1))"]
       interval: 30s
@@ -81,7 +92,7 @@ services:
             en_us: Web UI (Port 3501)
             id_id: Tampilan Web (Port 3501)
       volumes:
-        - container: /app/data
+        - container: /app/db
           description:
             en_us: SQLite Database & Stock CSVs (Cimahi)
             id_id: Database SQLite & Data Laporan Stok (Cimahi)
