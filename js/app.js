@@ -1288,7 +1288,7 @@ document.addEventListener('DOMContentLoaded', () => {
             card.innerHTML = `
               <div class="report-item-header">
                 <div class="report-item-date">
-                  <i data-lucide="calendar" style="width: 14px; height: 14px;"></i> ${dateDisplay}
+                  <i data-lucide="calendar" style="width: 14px; height: 14px;"></i> ${escapeHtml(dateDisplay)}
                 </div>
                 <span class="badge-stock">${totalStockFmt}</span>
               </div>
@@ -1296,10 +1296,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 <span>${escapeHtml(d.filename || 'Laporan')}</span> &bull; <span>${d.total_merks || 0} merk / ${d.total_items || 0} item</span>
               </div>
               <div class="report-item-actions">
-                <button class="btn-mini-primary" data-action="view" data-date="${d.report_date}">
+                <button class="btn-mini-primary" data-action="view" data-date="${escapeHtml(d.report_date)}">
                   <i data-lucide="eye" style="width: 13px; height: 13px;"></i> Buka di Tabel
                 </button>
-                <button class="btn-mini-danger" data-action="delete" data-date="${d.report_date}">
+                <button class="btn-mini-danger" data-action="delete" data-date="${escapeHtml(d.report_date)}">
                   <i data-lucide="trash-2" style="width: 13px; height: 13px;"></i> Hapus
                 </button>
               </div>
@@ -2922,11 +2922,11 @@ document.addEventListener('DOMContentLoaded', () => {
           stockContainer.innerHTML = json.dates.map(d => `
             <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 8px; margin-bottom: 8px; font-size: 12px;">
               <div>
-                <strong style="color: var(--text-primary);">${d.report_date}</strong>
+                <strong style="color: var(--text-primary);">${escapeHtml(d.report_date)}</strong>
                 <span style="color: var(--text-secondary); margin-left: 8px;">(${d.total_items.toLocaleString('id-ID')} item, ${d.total_stock.toLocaleString('id-ID')} pcs, ${d.total_outlets} outlet)</span>
                 <div style="color: var(--text-muted); font-size: 11px;">Berkas: ${escapeHtml(d.filename || '-')}</div>
               </div>
-              <button class="btn-mini-danger" style="padding: 4px 8px; font-size: 11px;" onclick="window._deleteBatch('stock', '${d.report_date}')">
+              <button class="btn-mini-danger" style="padding: 4px 8px; font-size: 11px;" data-batch-type="stock" data-batch-date="${escapeHtml(d.report_date)}">
                 Hapus
               </button>
             </div>
@@ -2948,11 +2948,11 @@ document.addEventListener('DOMContentLoaded', () => {
           salesContainer.innerHTML = json.batches.map(b => `
             <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 8px; margin-bottom: 8px; font-size: 12px;">
               <div>
-                <strong style="color: var(--text-primary);">${b.batch_date}</strong>
+                <strong style="color: var(--text-primary);">${escapeHtml(b.batch_date)}</strong>
                 <span style="color: var(--text-secondary); margin-left: 8px;">(${b.total_rows.toLocaleString('id-ID')} transaksi, ${b.total_qty.toLocaleString('id-ID')} pcs)</span>
                 <div style="color: var(--text-muted); font-size: 11px;">Berkas: ${escapeHtml(b.filename || '-')}</div>
               </div>
-              <button class="btn-mini-danger" style="padding: 4px 8px; font-size: 11px;" onclick="window._deleteBatch('sales', '${b.batch_date}')">
+              <button class="btn-mini-danger" style="padding: 4px 8px; font-size: 11px;" data-batch-type="sales" data-batch-date="${escapeHtml(b.batch_date)}">
                 Hapus
               </button>
             </div>
@@ -2974,11 +2974,11 @@ document.addEventListener('DOMContentLoaded', () => {
           purchContainer.innerHTML = json.batches.map(b => `
             <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 8px; margin-bottom: 8px; font-size: 12px;">
               <div>
-                <strong style="color: var(--text-primary);">${b.batch_date}</strong>
+                <strong style="color: var(--text-primary);">${escapeHtml(b.batch_date)}</strong>
                 <span style="color: var(--text-secondary); margin-left: 8px;">(${b.total_rows.toLocaleString('id-ID')} baris, ${b.total_qty.toLocaleString('id-ID')} pcs)</span>
                 <div style="color: var(--text-muted); font-size: 11px;">Berkas: ${escapeHtml(b.filename || '-')}</div>
               </div>
-              <button class="btn-mini-danger" style="padding: 4px 8px; font-size: 11px;" onclick="window._deleteBatch('purchases', '${b.batch_date}')">
+              <button class="btn-mini-danger" style="padding: 4px 8px; font-size: 11px;" data-batch-type="purchases" data-batch-date="${escapeHtml(b.batch_date)}">
                 Hapus
               </button>
             </div>
@@ -2990,6 +2990,22 @@ document.addEventListener('DOMContentLoaded', () => {
         purchContainer.innerHTML = `<p style="color: var(--status-danger); font-size: 12px;">Gagal memuat: ${e.message}</p>`;
       }
     }
+
+    // Delete buttons are rebuilt on every load (innerHTML replaced above), so
+    // a delegated listener on the stable container — wired once per container
+    // — is used instead of re-attaching one per button, and instead of the
+    // inline onclick="..." string-concatenation this used to be (unsafe if a
+    // batch's date ever contained a quote character; see isValidDateString
+    // on the server for where that's now rejected at upload time too).
+    [stockContainer, salesContainer, purchContainer].forEach(container => {
+      if (!container || container.dataset.deleteWired) return;
+      container.dataset.deleteWired = 'true';
+      container.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-batch-type]');
+        if (!btn) return;
+        window._deleteBatch(btn.dataset.batchType, btn.dataset.batchDate);
+      });
+    });
   }
 
   // Global batch deletion helper
