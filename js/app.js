@@ -679,11 +679,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const itemGroup = appState.itemGroupMap[item.code];
+    const isCimahiItem = item.code.startsWith('CMH-');
 
     return `
       <tr data-item-code="${escapeHtml(item.code)}" data-item-name="${escapeHtml(item.name.toLowerCase())}">
         <td>
-          <div style="font-weight: 600; color: var(--text-primary); white-space: normal; min-width: 220px;">${escapeHtml(item.name)}</div>
+          <div style="font-weight: 600; color: var(--text-primary); white-space: normal; min-width: 220px;">
+            ${escapeHtml(item.name)}${isCimahiItem ? ' <span class="badge-region-cimahi">Cimahi</span>' : ''}
+          </div>
           <div style="font-size: 11px; color: var(--text-muted);">${escapeHtml(item.code)}${itemGroup ? ` &bull; ${escapeHtml(itemGroup)}` : ''}</div>
         </td>
         ${cellsHtml}

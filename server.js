@@ -100,12 +100,10 @@ function extractDateFromCSV(csvText, fallbackFilename) {
  * here so they can never collide with a Bandung item sharing the same raw
  * code, no matter which upload lands first.
  */
-const CIMAHI_ITEM_CODE_PREFIX = 'CMH-';
-
 function namespaceItemCodesForRegion(parsedData, region) {
   if (region !== 'CIMAHI') return parsedData;
 
-  const prefixCode = (code) => (code.startsWith(CIMAHI_ITEM_CODE_PREFIX) ? code : CIMAHI_ITEM_CODE_PREFIX + code);
+  const prefixCode = (code) => StockDataParser.namespaceItemCode(code, 'KALAPA CELL'); // any Cimahi outlet works — forces the prefix
 
   const namespaced = { allOutlets: parsedData.allOutlets || [], allItems: {}, merks: {} };
 
