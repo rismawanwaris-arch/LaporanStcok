@@ -52,14 +52,26 @@ const OUTLET_NAME_MIGRATIONS = {
  * covered by the NEW upload, old values are dropped and replaced (so a
  * corrected re-upload of the same branch still clears stale numbers); every
  * outlet from a DIFFERENT upload is left untouched.
+ *
+ * GDG (the shared central warehouse) is a special case: every regional
+ * export carries its own "Gudang" column (Bandung's file has one, and so
+ * does Cimahi's), but GDG isn't owned by either region — it's not something
+ * a regional upload should get to overwrite. Without this, uploading
+ * Cimahi's file second would replace Bandung's real warehouse stock with
+ * whatever (typically much smaller, sometimes zero) number happens to be in
+ * Cimahi's own Gudang column, silently destroying real stock data. GDG is
+ * therefore excluded from "outlets this new upload owns" for already-known
+ * items — a brand new item this upload introduces still gets to report its
+ * own GDG value, since there's no prior value to protect there.
  */
 function mergeParsedStockData(oldData, newData) {
   if (!oldData || !oldData.merks) return newData;
 
-  const newOutletSet = new Set(newData.allOutlets || []);
+  const newOutletSet = new Set((newData.allOutlets || []).filter(o => o !== 'GDG'));
   const merged = { merks: {}, allOutlets: [], allItems: { ...(oldData.allItems || {}) } };
 
-  // Start from the old data, stripped of any outlet this new upload owns.
+  // Start from the old data, stripped of any outlet this new upload owns
+  // (GDG is never stripped here — see comment above).
   Object.entries(oldData.merks).forEach(([merkName, merkObj]) => {
     const items = {};
     Object.entries(merkObj.items || {}).forEach(([code, item]) => {
@@ -76,16 +88,28 @@ function mergeParsedStockData(oldData, newData) {
     };
   });
 
-  // Layer the new upload on top.
+  // Layer the new upload on top — but drop its own GDG value for any item
+  // that already existed before this upload (that number isn't this
+  // upload's to report); a genuinely new item this upload introduces keeps
+  // its GDG value since there's nothing prior to protect.
   Object.entries(newData.merks || {}).forEach(([merkName, merkObj]) => {
-    if (!merged.merks[merkName]) {
+    const merkExisted = !!merged.merks[merkName];
+    if (!merkExisted) {
       merged.merks[merkName] = { name: merkObj.name || merkName, outlets: [], items: {} };
     }
     const target = merged.merks[merkName];
-    (merkObj.outlets || []).forEach(o => { if (!target.outlets.includes(o)) target.outlets.push(o); });
+    (merkObj.outlets || []).forEach(o => {
+      if (o === 'GDG' && merkExisted) return; // this merk's GDG already came from old data
+      if (!target.outlets.includes(o)) target.outlets.push(o);
+    });
     Object.entries(merkObj.items || {}).forEach(([code, item]) => {
-      if (!target.items[code]) target.items[code] = { code: item.code, name: item.name, stocks: {} };
-      Object.assign(target.items[code].stocks, item.stocks || {});
+      const isNewItem = !target.items[code];
+      if (isNewItem) target.items[code] = { code: item.code, name: item.name, stocks: {} };
+
+      const incomingStocks = { ...(item.stocks || {}) };
+      if (!isNewItem) delete incomingStocks.GDG;
+
+      Object.assign(target.items[code].stocks, incomingStocks);
       if (item.name) target.items[code].name = item.name;
       merged.allItems[code] = item.name;
     });
@@ -93,6 +117,7 @@ function mergeParsedStockData(oldData, newData) {
 
   const outletUnion = new Set();
   Object.values(merged.merks).forEach(m => (m.outlets || []).forEach(o => outletUnion.add(o)));
+  if ((oldData.allOutlets || []).includes('GDG')) outletUnion.add('GDG');
   merged.allOutlets = Array.from(outletUnion);
 
   return merged;
