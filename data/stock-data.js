@@ -137,6 +137,21 @@ class StockDataParser {
   }
 
   /**
+   * Bandung and Cimahi assign item codes independently, so the same raw code
+   * can mean two different products depending on region (see server.js's
+   * namespaceItemCodesForRegion for the stock-upload case). This is the
+   * per-row equivalent, used by TransactionParser for sales/purchase records
+   * where each row already carries its own outlet — the region is derived
+   * from that outlet instead of needing a separate manual selection.
+   */
+  static CIMAHI_ITEM_CODE_PREFIX = 'CMH-';
+
+  static namespaceItemCode(code, outletName) {
+    if (!code || code.startsWith(this.CIMAHI_ITEM_CODE_PREFIX)) return code;
+    return this.getOutletRegion(outletName) === 'CIMAHI' ? `${this.CIMAHI_ITEM_CODE_PREFIX}${code}` : code;
+  }
+
+  /**
    * Parses the raw CSV string into a structured JSON object.
    * @param {string} csvText 
    * @returns {Object} Structured stock data
