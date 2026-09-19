@@ -451,26 +451,36 @@ class StockDatabase {
   // SALES BATCHES & RECORDS
   // ==========================================
 
+  /**
+   * Same-date multi-file uploads (e.g. Bandung's and Cimahi's sales exports
+   * for the same day, uploaded separately) used to wipe each other out: a
+   * second upload for a date that already had a batch deleted ALL of that
+   * batch's rows before inserting its own, discarding the first upload's
+   * outlets entirely. Now the delete is scoped to only the outlets THIS
+   * upload covers (mirroring mergeParsedStockData's approach for stock
+   * reports), and the batch's totals are recomputed from what's actually
+   * left in the table afterward rather than trusting just the new file.
+   */
   saveSalesBatch(batchDate, filename, parsedSales) {
     const now = new Date().toISOString();
     const existing = this.db.prepare(`SELECT id FROM sales_batches WHERE batch_date = ?`).get(batchDate);
+    const newOutlets = Array.from(new Set((parsedSales.uniqueOutlets || []).map(o => normalizeOutletName(o) || o)));
 
     let batchId;
     if (existing) {
       batchId = existing.id;
-      this.db.prepare(`
-        UPDATE sales_batches
-        SET filename = ?, total_rows = ?, total_qty = ?, total_amount = ?, total_profit = ?, total_outlets = ?, created_at = ?
-        WHERE id = ?
-      `).run(filename, parsedSales.totalRows, parsedSales.totalQty, parsedSales.totalAmount, parsedSales.totalProfit, parsedSales.uniqueOutlets.length, now, batchId);
-
-      this.db.prepare(`DELETE FROM sales_records WHERE batch_id = ?`).run(batchId);
+      if (newOutlets.length > 0) {
+        const placeholders = newOutlets.map(() => '?').join(',');
+        this.db.prepare(`DELETE FROM sales_records WHERE batch_id = ? AND outlet IN (${placeholders})`).run(batchId, ...newOutlets);
+      } else {
+        this.db.prepare(`DELETE FROM sales_records WHERE batch_id = ?`).run(batchId);
+      }
     } else {
       const insertBatch = this.db.prepare(`
         INSERT INTO sales_batches (batch_date, filename, total_rows, total_qty, total_amount, total_profit, total_outlets, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `);
-      insertBatch.run(batchDate, filename, parsedSales.totalRows, parsedSales.totalQty, parsedSales.totalAmount, parsedSales.totalProfit, parsedSales.uniqueOutlets.length, now);
+      insertBatch.run(batchDate, filename, 0, 0, 0, 0, 0, now);
 
       const newRow = this.db.prepare(`SELECT id FROM sales_batches WHERE batch_date = ?`).get(batchDate);
       batchId = newRow.id;
@@ -500,17 +510,29 @@ class StockDatabase {
       throw err;
     }
 
+    const totals = this.db.prepare(`
+      SELECT COUNT(*) as totalRows, COALESCE(SUM(qty), 0) as totalQty, COALESCE(SUM(subtotal), 0) as totalAmount,
+             COALESCE(SUM(profit_loss), 0) as totalProfit, COUNT(DISTINCT outlet) as totalOutlets
+      FROM sales_records WHERE batch_id = ?
+    `).get(batchId);
+
+    this.db.prepare(`
+      UPDATE sales_batches
+      SET filename = ?, total_rows = ?, total_qty = ?, total_amount = ?, total_profit = ?, total_outlets = ?, created_at = ?
+      WHERE id = ?
+    `).run(filename, totals.totalRows, totals.totalQty, totals.totalAmount, totals.totalProfit, totals.totalOutlets, now, batchId);
+
     this.backupDatabase();
 
     return {
       id: batchId,
       batchDate,
       filename,
-      totalRows: parsedSales.totalRows,
-      totalQty: parsedSales.totalQty,
-      totalAmount: parsedSales.totalAmount,
-      totalProfit: parsedSales.totalProfit,
-      totalOutlets: parsedSales.uniqueOutlets.length,
+      totalRows: totals.totalRows,
+      totalQty: totals.totalQty,
+      totalAmount: totals.totalAmount,
+      totalProfit: totals.totalProfit,
+      totalOutlets: totals.totalOutlets,
       updated: !!existing
     };
   }
@@ -537,26 +559,27 @@ class StockDatabase {
   // PURCHASE BATCHES & RECORDS
   // ==========================================
 
+  /** Same-date multi-file merge fix — see saveSalesBatch's comment above. */
   savePurchaseBatch(batchDate, filename, parsedPurchases) {
     const now = new Date().toISOString();
     const existing = this.db.prepare(`SELECT id FROM purchase_batches WHERE batch_date = ?`).get(batchDate);
+    const newOutlets = Array.from(new Set((parsedPurchases.uniqueOutlets || []).map(o => normalizeOutletName(o) || o)));
 
     let batchId;
     if (existing) {
       batchId = existing.id;
-      this.db.prepare(`
-        UPDATE purchase_batches
-        SET filename = ?, total_rows = ?, total_qty = ?, total_amount = ?, total_outlets = ?, created_at = ?
-        WHERE id = ?
-      `).run(filename, parsedPurchases.totalRows, parsedPurchases.totalQty, parsedPurchases.totalAmount, parsedPurchases.uniqueOutlets.length, now, batchId);
-
-      this.db.prepare(`DELETE FROM purchase_records WHERE batch_id = ?`).run(batchId);
+      if (newOutlets.length > 0) {
+        const placeholders = newOutlets.map(() => '?').join(',');
+        this.db.prepare(`DELETE FROM purchase_records WHERE batch_id = ? AND outlet IN (${placeholders})`).run(batchId, ...newOutlets);
+      } else {
+        this.db.prepare(`DELETE FROM purchase_records WHERE batch_id = ?`).run(batchId);
+      }
     } else {
       const insertBatch = this.db.prepare(`
         INSERT INTO purchase_batches (batch_date, filename, total_rows, total_qty, total_amount, total_outlets, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
       `);
-      insertBatch.run(batchDate, filename, parsedPurchases.totalRows, parsedPurchases.totalQty, parsedPurchases.totalAmount, parsedPurchases.uniqueOutlets.length, now);
+      insertBatch.run(batchDate, filename, 0, 0, 0, 0, now);
 
       const newRow = this.db.prepare(`SELECT id FROM purchase_batches WHERE batch_date = ?`).get(batchDate);
       batchId = newRow.id;
@@ -585,16 +608,28 @@ class StockDatabase {
       throw err;
     }
 
+    const totals = this.db.prepare(`
+      SELECT COUNT(*) as totalRows, COALESCE(SUM(qty), 0) as totalQty, COALESCE(SUM(subtotal), 0) as totalAmount,
+             COUNT(DISTINCT outlet) as totalOutlets
+      FROM purchase_records WHERE batch_id = ?
+    `).get(batchId);
+
+    this.db.prepare(`
+      UPDATE purchase_batches
+      SET filename = ?, total_rows = ?, total_qty = ?, total_amount = ?, total_outlets = ?, created_at = ?
+      WHERE id = ?
+    `).run(filename, totals.totalRows, totals.totalQty, totals.totalAmount, totals.totalOutlets, now, batchId);
+
     this.backupDatabase();
 
     return {
       id: batchId,
       batchDate,
       filename,
-      totalRows: parsedPurchases.totalRows,
-      totalQty: parsedPurchases.totalQty,
-      totalAmount: parsedPurchases.totalAmount,
-      totalOutlets: parsedPurchases.uniqueOutlets.length,
+      totalRows: totals.totalRows,
+      totalQty: totals.totalQty,
+      totalAmount: totals.totalAmount,
+      totalOutlets: totals.totalOutlets,
       updated: !!existing
     };
   }
