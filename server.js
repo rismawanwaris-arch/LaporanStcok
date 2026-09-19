@@ -92,6 +92,15 @@ function extractDateFromCSV(csvText, fallbackFilename) {
   return new Date().toISOString().split('T')[0];
 }
 
+// A user-supplied customDate was stored as-is on the sales/purchase/auto
+// upload endpoints (only /api/upload validated it) and later rendered
+// unescaped into the DOM in js/app.js — an attacker-controlled string here
+// was a stored-XSS vector via report_date/batch_date. Every endpoint that
+// accepts customDate must validate it the same way before using it.
+function isValidDateString(value) {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
 // MIME types mapping
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -364,6 +373,10 @@ const server = http.createServer((req, res) => {
           return sendJson(req, res, 400, { success: false, message: 'Data berkas penjualan tidak ditemukan.' });
         }
 
+        if (payload.customDate && !isValidDateString(payload.customDate)) {
+          return sendJson(req, res, 400, { success: false, message: 'Format tanggal harus YYYY-MM-DD.' });
+        }
+
         const parsed = TransactionParser.parseSales(buffer);
         const batchDate = payload.customDate || parsed.batchDate;
         const saved = db.saveSalesBatch(batchDate, payload.filename || 'sales.xls', parsed);
@@ -415,6 +428,10 @@ const server = http.createServer((req, res) => {
           return sendJson(req, res, 400, { success: false, message: 'Data berkas pembelian tidak ditemukan.' });
         }
 
+        if (payload.customDate && !isValidDateString(payload.customDate)) {
+          return sendJson(req, res, 400, { success: false, message: 'Format tanggal harus YYYY-MM-DD.' });
+        }
+
         const parsed = TransactionParser.parsePurchases(buffer);
         const batchDate = payload.customDate || parsed.batchDate;
         const saved = db.savePurchaseBatch(batchDate, payload.filename || 'purchases.xls', parsed);
@@ -454,6 +471,10 @@ const server = http.createServer((req, res) => {
       try {
         const buffer = getBufferFromPayload(payload);
         if (!buffer) return sendJson(req, res, 400, { success: false, message: 'Berkas kosong.' });
+
+        if (payload.customDate && !isValidDateString(payload.customDate)) {
+          return sendJson(req, res, 400, { success: false, message: 'Format tanggal harus YYYY-MM-DD.' });
+        }
 
         const detectedType = TransactionParser.detectType(buffer);
 
