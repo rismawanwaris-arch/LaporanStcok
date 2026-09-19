@@ -30,8 +30,15 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD node -e "require('http').get('http://127.0.0.1:3000/api/dates', (res) => process.exit(res.statusCode === 200 ? 0 : 1))"
 
-# Volume data persisten
-VOLUME ["/app/data"]
+# No VOLUME instruction here on purpose: declaring one forces Docker to
+# treat that path as an anonymous-volume mount point for every container
+# from this image, even when docker-compose.yml doesn't bind-mount anything
+# there itself — that's exactly what broke the Cimahi deployment (which
+# mounts its data at /app/db instead), since /app/data kept getting
+# silently volume-ized out from under the application source code that
+# COPY put there, crash-looping it with MODULE_NOT_FOUND. Persistent
+# storage is fully handled by the explicit `volumes:` entries in
+# docker-compose.yml for both services instead.
 
 # Jalankan server
 CMD ["node", "server.js"]
