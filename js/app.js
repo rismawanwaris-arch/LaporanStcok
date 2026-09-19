@@ -98,6 +98,25 @@ document.addEventListener('DOMContentLoaded', () => {
     // Check backend API and database first, fallback to static CSV
     checkBackendAndLoad();
     loadItemGroupMap();
+    loadSiteLabel();
+  }
+
+  // Bandung and Cimahi run the exact same code as two separate deployments
+  // (see docker-compose.yml) — the only thing that tells them apart in the
+  // UI is a SITE_NAME env var each instance sets, surfaced here so the
+  // sidebar and browser tab make it obvious which one you're looking at.
+  async function loadSiteLabel() {
+    try {
+      const res = await fetch('/api/config');
+      const json = await res.json();
+      if (json.success && json.siteName) {
+        const brandTitle = document.getElementById('brand-title');
+        if (brandTitle) brandTitle.textContent = json.siteName.toUpperCase();
+        document.title = `Voucher Analytics - ${json.siteName}`;
+      }
+    } catch (e) {
+      console.warn('Gagal memuat label wilayah:', e.message);
+    }
   }
 
   // Fetches the item_code -> item_group (category) map derived from sales
