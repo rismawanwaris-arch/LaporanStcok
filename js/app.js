@@ -28,6 +28,17 @@ document.addEventListener('DOMContentLoaded', () => {
   // since init() synchronously wires each tab's sortable headers.
   const columnSortState = {};
 
+  // Declared here (ahead of init(), same TDZ reason as columnSortState
+  // above) since initRegionGate() reads these synchronously during init().
+  const GLOBAL_REGION_KEY = 'activeRegion';
+  const REGION_FILTER_IDS = [
+    'stock-region-filter',
+    'rebalance-region-filter',
+    'coverage-region-filter',
+    'po-region-filter',
+    'outlet-region-filter'
+  ];
+
   let virtualTable = {
     items: [],
     filteredItems: [],
@@ -55,7 +66,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Bandung) — hardcoded server-side (see StockDataParser.CIMAHI_OUTLETS),
     // fetched once so the Matriks Stok Cabang tab can filter its outlet
     // columns by region client-side.
-    cimahiOutlets: new Set()
+    cimahiOutlets: new Set(),
+    // 'BANDUNG' | 'CIMAHI' | 'ALL' — set once via the region gate/switcher
+    // and mirrored into the 5 hidden per-tab selects (see initRegionGate).
+    globalRegion: null
   };
 
   // DOM Elements
@@ -104,6 +118,73 @@ document.addEventListener('DOMContentLoaded', () => {
     checkBackendAndLoad();
     loadItemGroupMap();
     loadOutletRegionMap();
+
+    // Must run after the setup*Controls() calls above so their region-filter
+    // change listeners already exist by the time this dispatches 'change' on
+    // the (now hidden) per-tab selects.
+    initRegionGate();
+  }
+
+  // Every tab used to need its own "Wilayah" dropdown set by hand, which was
+  // easy to leave inconsistent across tabs. Now there's a single global
+  // choice (remembered in this browser via localStorage) that drives all 5
+  // per-tab selects at once — see syncHiddenRegionFilters. The selects stay
+  // in the DOM (just hidden via CSS) so every existing region-filter change
+  // handler keeps working unchanged.
+  function syncHiddenRegionFilters(region) {
+    REGION_FILTER_IDS.forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.value = region;
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    // Convenience default for the stock-upload region picker — still
+    // independently changeable, since upload correctness matters more than
+    // view convenience (e.g. you might be viewing Cimahi but uploading a
+    // Bandung file).
+    const importRegionSel = document.getElementById('import-stock-region');
+    if (importRegionSel && (region === 'BANDUNG' || region === 'CIMAHI')) {
+      importRegionSel.value = region;
+    }
+  }
+
+  function updateGlobalRegionLabel(region) {
+    const label = document.getElementById('global-region-label');
+    if (!label) return;
+    label.textContent = region === 'BANDUNG' ? 'Bandung' : region === 'CIMAHI' ? 'Cimahi' : 'Semua';
+  }
+
+  function applyGlobalRegion(region) {
+    localStorage.setItem(GLOBAL_REGION_KEY, region);
+    appState.globalRegion = region;
+    syncHiddenRegionFilters(region);
+    updateGlobalRegionLabel(region);
+    const overlay = document.getElementById('region-gate-overlay');
+    if (overlay) overlay.style.display = 'none';
+  }
+
+  function initRegionGate() {
+    const overlay = document.getElementById('region-gate-overlay');
+    if (overlay) {
+      overlay.querySelectorAll('[data-region-choice]').forEach(btn => {
+        btn.addEventListener('click', () => applyGlobalRegion(btn.dataset.regionChoice));
+      });
+    }
+
+    const switcher = document.getElementById('global-region-switcher');
+    if (switcher) {
+      switcher.addEventListener('click', () => {
+        if (overlay) overlay.style.display = 'flex';
+      });
+    }
+
+    const saved = localStorage.getItem(GLOBAL_REGION_KEY);
+    if (saved) {
+      applyGlobalRegion(saved);
+    } else if (overlay) {
+      overlay.style.display = 'flex';
+    }
   }
 
   // Fetches the item_code -> item_group (category) map derived from sales
