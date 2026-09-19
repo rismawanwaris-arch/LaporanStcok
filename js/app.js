@@ -2909,8 +2909,35 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function loadImportBatches() {
+    const stockContainer = document.getElementById('import-history-stock');
     const salesContainer = document.getElementById('import-history-sales');
     const purchContainer = document.getElementById('import-history-purchases');
+
+    // 0. Stock Reports
+    if (stockContainer) {
+      try {
+        const res = await fetch('/api/dates');
+        const json = await res.json();
+        if (json.success && json.dates.length > 0) {
+          stockContainer.innerHTML = json.dates.map(d => `
+            <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 8px; margin-bottom: 8px; font-size: 12px;">
+              <div>
+                <strong style="color: var(--text-primary);">${d.report_date}</strong>
+                <span style="color: var(--text-secondary); margin-left: 8px;">(${d.total_items.toLocaleString('id-ID')} item, ${d.total_stock.toLocaleString('id-ID')} pcs, ${d.total_outlets} outlet)</span>
+                <div style="color: var(--text-muted); font-size: 11px;">Berkas: ${escapeHtml(d.filename || '-')}</div>
+              </div>
+              <button class="btn-mini-danger" style="padding: 4px 8px; font-size: 11px;" onclick="window._deleteBatch('stock', '${d.report_date}')">
+                Hapus
+              </button>
+            </div>
+          `).join('');
+        } else {
+          stockContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 12px;">Belum ada riwayat stok yang diimpor.</p>';
+        }
+      } catch (e) {
+        stockContainer.innerHTML = `<p style="color: var(--status-danger); font-size: 12px;">Gagal memuat: ${e.message}</p>`;
+      }
+    }
 
     // 1. Sales Batches
     if (salesContainer) {
@@ -2969,7 +2996,9 @@ document.addEventListener('DOMContentLoaded', () => {
   window._deleteBatch = async function(type, date) {
     if (!confirm(`Hapus batch ${type} untuk tanggal ${date}?`)) return;
     try {
-      const endpoint = type === 'sales' ? `/api/sales?date=${date}` : `/api/purchases?date=${date}`;
+      const endpoint = type === 'stock' ? `/api/report?date=${date}`
+        : type === 'sales' ? `/api/sales?date=${date}`
+        : `/api/purchases?date=${date}`;
       const res = await fetch(endpoint, { method: 'DELETE' });
       const json = await res.json();
       if (json.success) {
@@ -2977,6 +3006,7 @@ document.addEventListener('DOMContentLoaded', () => {
         loadImportBatches();
         loadRebalanceData();
         loadPOData();
+        if (type === 'stock') checkBackendAndLoad();
       } else {
         alert(json.message || 'Gagal menghapus batch');
       }
