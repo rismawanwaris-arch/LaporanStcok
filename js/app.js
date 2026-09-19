@@ -936,20 +936,12 @@ document.addEventListener('DOMContentLoaded', () => {
         alert('Tidak ada data yang dapat diekspor. Pilih merk terlebih dahulu.');
         return;
       }
-      
-      let merkData;
-      if (appState.activeMerk === 'ALL') {
-        merkData = {
-          name: 'SEMUA MERK',
-          items: {},
-          outlets: appState.parsedData.allOutlets
-        };
-        Object.values(appState.parsedData.merks).forEach(merkObj => {
-          Object.assign(merkData.items, merkObj.items);
-        });
-      } else {
-        merkData = appState.parsedData.merks[appState.activeMerk];
-      }
+
+      // Matches whatever's currently on screen — reuses the same Kategori +
+      // search filtering as the table and charts, instead of re-deriving an
+      // unfiltered item list from scratch (that previously made the export
+      // always include every item regardless of active filters).
+      const merkData = getFilteredMerkDataForCharts(getActiveMerkData());
       const items = Object.values(merkData.items);
       const outlets = OutletSorter.sortOutlets(merkData.outlets, appState.activeMerk);
       
@@ -1013,19 +1005,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      let merkData;
-      if (appState.activeMerk === 'ALL') {
-        merkData = {
-          name: 'SEMUA MERK',
-          items: {},
-          outlets: appState.parsedData.allOutlets
-        };
-        Object.values(appState.parsedData.merks).forEach(merkObj => {
-          Object.assign(merkData.items, merkObj.items);
-        });
-      } else {
-        merkData = appState.parsedData.merks[appState.activeMerk];
-      }
+      const merkData = getFilteredMerkDataForCharts(getActiveMerkData());
       const items = Object.values(merkData.items);
       const outlets = OutletSorter.sortOutlets(merkData.outlets, appState.activeMerk);
 
