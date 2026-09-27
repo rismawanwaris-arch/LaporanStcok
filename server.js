@@ -184,9 +184,6 @@ function sendJson(req, res, statusCode, data) {
   const bodyBuf = Buffer.from(JSON.stringify(data), 'utf8');
   const headers = {
     'Content-Type': 'application/json; charset=utf-8',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
     'Vary': 'Accept-Encoding'
   };
 
@@ -249,15 +246,12 @@ function bufferToStockCsvText(buffer, filename) {
 }
 
 const server = http.createServer((req, res) => {
-  // CORS Preflight
-  if (req.method === 'OPTIONS') {
-    res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type'
-    });
-    return res.end();
-  }
+  // No CORS headers anywhere in this server: the frontend is served from
+  // this exact same origin and never needs cross-origin access, so granting
+  // it (via Access-Control-Allow-Origin: '*') only ever helped an unrelated
+  // website read this app's API responses from a visitor's browser — a
+  // same-origin app has no legitimate use for a CORS preflight response
+  // either, so there's nothing to answer OPTIONS with.
 
   const parsedUrl = new URL(req.url, 'http://localhost');
   const pathname = parsedUrl.pathname;
