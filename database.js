@@ -925,10 +925,10 @@ class StockDatabase {
 
     function agingBucketFor(agingDays, neverSold) {
       if (neverSold) return 'NEVER_SOLD';
-      if (agingDays <= 30) return 'FRESH';
-      if (agingDays <= 60) return 'AGING_30_60';
-      if (agingDays <= 90) return 'AGING_60_90';
-      return 'DEAD_STOCK';
+      if (agingDays <= 7) return 'FRESH';          // 0-7 hari: putaran cepat mingguan
+      if (agingDays <= 14) return 'SLOW_7_14';     // 8-14 hari: mulai melambat (1-2 minggu)
+      if (agingDays <= 30) return 'AGING_15_30';   // 15-30 hari: macet / kritis perputaran uang
+      return 'DEAD_STOCK';                         // > 30 hari: Dead stock konter pulsa (cashflow macet)
     }
 
     const items = currentStockRows.map(r => {
@@ -956,9 +956,9 @@ class StockDatabase {
       };
     });
 
-    // Worst-first: dead stock and never-sold items with the highest tied-up value surface first
+    // Worst-first: dead stock dan never-sold items dengan modal macet tertinggi muncul paling atas
     items.sort((a, b) => {
-      const rank = { NEVER_SOLD: 0, DEAD_STOCK: 1, AGING_60_90: 2, AGING_30_60: 3, FRESH: 4 };
+      const rank = { NEVER_SOLD: 0, DEAD_STOCK: 1, AGING_15_30: 2, SLOW_7_14: 3, FRESH: 4 };
       if (rank[a.agingBucket] !== rank[b.agingBucket]) return rank[a.agingBucket] - rank[b.agingBucket];
       return b.estimatedValue - a.estimatedValue;
     });

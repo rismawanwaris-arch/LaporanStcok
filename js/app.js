@@ -2209,10 +2209,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   const AGING_BUCKET_BADGES = {
-    FRESH: '<span class="status-badge" style="background: rgba(16, 185, 129, 0.12); color: var(--status-success);">🟢 Segar</span>',
-    AGING_30_60: '<span class="status-badge badge-med-urgency">🟡 31-60 Hr</span>',
-    AGING_60_90: '<span class="status-badge" style="background: rgba(245, 158, 11, 0.15); color: var(--status-warning);">🟠 61-90 Hr</span>',
-    DEAD_STOCK: '<span class="status-badge badge-high-urgency">🔴 Dead Stock</span>',
+    FRESH: '<span class="status-badge" style="background: rgba(16, 185, 129, 0.12); color: var(--status-success);">🟢 Segar (&le; 7 Hr)</span>',
+    SLOW_7_14: '<span class="status-badge badge-med-urgency">🟡 Lambat (8-14 Hr)</span>',
+    AGING_15_30: '<span class="status-badge" style="background: rgba(245, 158, 11, 0.15); color: var(--status-warning);">🟠 Macet (15-30 Hr)</span>',
+    DEAD_STOCK: '<span class="status-badge badge-high-urgency">🔴 Dead Stock (&gt; 30 Hr)</span>',
     NEVER_SOLD: '<span class="status-badge" style="background: rgba(107, 114, 128, 0.15); color: var(--text-muted);">⚪ Belum Pernah</span>'
   };
 

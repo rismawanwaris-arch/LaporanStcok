@@ -15,8 +15,8 @@ class InventoryRebalancer {
    * @returns {Array<Object>} List of actionable transfer recommendations
    */
   static generateTransferRecommendations(integratedData, options = {}) {
-    const targetDays = options.targetDays || 7;      // Target coverage days for receiver
-    const minOverstockDays = options.minOverstockDays || 20; // Min days to consider sender overstocked
+    const targetDays = options.targetDays || 4;      // Target coverage days for receiver (3-5 hari cukup untuk konter)
+    const minOverstockDays = options.minOverstockDays || 10; // Min days to consider sender overstocked (> 10 hari sudah overstock)
 
     const recommendations = [];
 
@@ -154,9 +154,9 @@ class InventoryRebalancer {
    * @returns {Array<Object>} List of PO suggestions
    */
   static generatePOSuggestions(integratedData, options = {}) {
-    const leadTimeDays = options.leadTimeDays || 3;    // Delivery time from distributor
-    const safetyDays = options.safetyDays || 4;        // Buffer stock days
-    const targetCoverageDays = options.targetDays || 14;// Target total stock in network
+    const leadTimeDays = options.leadTimeDays || 2;    // Delivery time from distributor (biasanya 1-2 hari)
+    const safetyDays = options.safetyDays || 2;        // Buffer stock days (2 hari buffer)
+    const targetCoverageDays = options.targetDays || 7;// Target total stock in network (7 hari perputaran cashflow)
 
     const suggestions = [];
 
