@@ -86,12 +86,17 @@
 }
 
 body {
-  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-feature-settings: "cv02", "cv03", "cv04", "tnum";
+  font-variant-numeric: tabular-nums;
   background-color: var(--bg-color);
   background-image: var(--bg-gradient);
   color: var(--text-primary);
   min-height: 100vh;
-  line-height: 1.6;
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   /* Root element (html) has default overflow:visible, so per the CSS spec
      this overflow is propagated up to become the viewport's own scroll
      behavior rather than making <body> a separate scrolling box — safe to
@@ -617,28 +622,27 @@ body {
   color: var(--accent-cyan);
 }
 
-/* Dashboard Summary Cards Grid */
 .dashboard-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
 }
 
 .summary-card {
-  padding: 20px;
+  padding: 14px 16px;
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
 }
 
 .card-icon {
-  width: 48px;
-  height: 48px;
+  width: 40px;
+  height: 40px;
   border-radius: var(--radius-md);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 20px;
+  font-size: 17px;
 }
 
 .card-icon.cyan {
@@ -678,38 +682,40 @@ body {
 }
 
 .card-details h3 {
-  font-size: 13px;
+  font-size: 11.5px;
   color: var(--text-secondary);
-  font-weight: 500;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
 }
 
 .card-details .card-value {
-  font-size: 22px;
-  font-weight: 800;
+  font-size: 19px;
+  font-weight: 700;
   color: var(--text-primary);
-  margin-top: 4px;
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
 }
 
 /* Selection and Filter bar */
 .filter-bar {
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
+  gap: 12px;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px;
+  padding: 12px 16px;
 }
 
 .filter-group {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
 label {
-  font-size: 14px;
+  font-size: 12.5px;
   color: var(--text-secondary);
   font-weight: 500;
 }
@@ -718,11 +724,11 @@ select, input[type="text"] {
   background: var(--input-bg);
   border: 1px solid var(--panel-border);
   color: var(--text-primary);
-  padding: 10px 14px;
-  border-radius: var(--radius-md);
+  padding: 7px 11px;
+  border-radius: var(--radius-sm);
   outline: none;
   font-family: inherit;
-  font-size: 14px;
+  font-size: 12.5px;
   transition: var(--transition-smooth);
 }
 
@@ -817,13 +823,14 @@ table.stock-table {
   width: 100%;
   border-collapse: collapse;
   text-align: left;
-  font-size: 14px;
+  font-size: 12.5px;
 }
 
 table.stock-table th, table.stock-table td {
   padding: 4px 6px; /* Incredibly compact padding */
   border-bottom: 1px solid var(--panel-border);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Thin dashed line separating each column's numbers */
@@ -838,16 +845,16 @@ table.stock-table td:not(:first-child):not(:last-child) {
   max-width: 55px;
   width: 48px;
   text-align: center;
-  font-size: 11.5px; /* compact numbers */
+  font-size: 12px; /* compact numbers */
 }
 
 table.stock-table th {
   background: var(--table-header-bg);
-  font-weight: 700;
-  color: var(--text-primary);
-  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 11.5px;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
   position: sticky;
   top: 0;
   z-index: 10;
@@ -1380,7 +1387,7 @@ footer a:hover {
 .analytics-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12.5px;
+  font-size: 12px;
   text-align: left;
 }
 
@@ -1394,20 +1401,24 @@ footer a:hover {
 }
 
 .analytics-table th {
-  padding: 10px 14px;
-  font-weight: 700;
-  color: var(--text-primary);
+  padding: 8px 12px;
+  font-weight: 600;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
   white-space: nowrap;
-  letter-spacing: 0.3px;
+  letter-spacing: 0.04em;
   border-right: 1px solid var(--panel-border);
 }
 
 .analytics-table td {
-  padding: 8px 14px;
+  padding: 6px 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   border-right: 1px solid rgba(255, 255, 255, 0.04);
   color: var(--text-primary);
   vertical-align: middle;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
 }
 
 .analytics-table tbody tr:hover {
