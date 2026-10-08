@@ -57,19 +57,21 @@ class InventoryRebalancer {
 
         // Check if outlet is a sender (Overstocked, Dead stock, or high surplus)
         if (outlet !== 'GDG') {
-          if (out.stock > 0 && out.ads === 0 && out.stock >= 5) {
-            // Dead stock in branch: can transfer almost all of it
+          // Status DEAD_STOCK: Terbukti tidak laku >= deadStockDays historis atau never sold
+          if (out.stock > 0 && out.status === 'DEAD_STOCK' && out.stock >= 3) {
+            const daysUnsold = out.neverSold ? 'Belum pernah terjual' : `Tidak terjual ${out.agingDays} hari`;
             senders.push({
               outlet,
               stock: out.stock,
-              available: Math.floor(out.stock * 0.8),
+              available: Math.floor(out.stock * 0.8), // Alihkan 80% dead stock
               isGudang: false,
               ads: 0,
               doc: Infinity,
-              isDeadStock: true
+              isDeadStock: true,
+              deadStockReason: daysUnsold
             });
           } else if (out.ads > 0 && (out.doc >= minOverstockDays || out.stock > Math.ceil(out.ads * 14))) {
-            // Overstocked branch: keep safe 7 days, release excess
+            // Overstocked branch: keep safe buffer, release excess
             const keepStock = Math.ceil(out.ads * targetDays);
             const excess = out.stock - keepStock;
             if (excess >= 3) {
@@ -119,7 +121,7 @@ class InventoryRebalancer {
           if (sender.isGudang) {
             reason = `Distribusi rutin dari Gudang (Sisa di GDG: ${sender.stock - transferQty} PCS)`;
           } else if (sender.isDeadStock) {
-            reason = `Mengalihkan dead stock dari ${sender.outlet} (0 penjualan, ada ${sender.stock} PCS)`;
+            reason = `Mengalihkan dead stock dari ${sender.outlet} (${sender.deadStockReason || 'Stok mati'}, ada ${sender.stock} PCS)`;
           } else {
             reason = `Penyeimbangan overstock: ${sender.outlet} (DoC ${sender.doc} hari) ke ${receiver.outlet} (DoC ${receiver.doc} hari)`;
           }

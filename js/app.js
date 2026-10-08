@@ -1244,6 +1244,53 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       });
     }
+
+    // Settings Handler (Dead Stock Days Configuration)
+    const btnSaveSettings = document.getElementById('btn-save-settings');
+    const inputDeadStockDays = document.getElementById('input-setting-deadstock-days');
+    const settingsFeedback = document.getElementById('settings-save-feedback');
+
+    if (btnSaveSettings && inputDeadStockDays) {
+      btnSaveSettings.addEventListener('click', async () => {
+        const deadDays = parseInt(inputDeadStockDays.value, 10);
+        if (isNaN(deadDays) || deadDays < 1 || deadDays > 365) {
+          alert('Harap masukkan angka batas hari antara 1 sampai 365.');
+          return;
+        }
+
+        btnSaveSettings.disabled = true;
+        btnSaveSettings.innerHTML = '<i data-lucide="loader-2" class="spin"></i> Menyimpan...';
+        if (window.lucide) lucide.createIcons();
+
+        try {
+          const res = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ deadStockDays: deadDays })
+          });
+          const json = await res.json();
+          if (res.ok && json.success) {
+            if (settingsFeedback) {
+              settingsFeedback.style.display = 'block';
+              settingsFeedback.style.color = 'var(--status-success)';
+              settingsFeedback.textContent = `✓ Pengaturan berhasil disimpan: Barang tidak terjual ≥ ${deadDays} hari dianggap Dead Stock.`;
+              setTimeout(() => { settingsFeedback.style.display = 'none'; }, 4000);
+            }
+            // Muat ulang tab analitik aktif jika ada
+            if (typeof loadABCAgingData === 'function') loadABCAgingData();
+            if (typeof loadRebalanceData === 'function') loadRebalanceData();
+          } else {
+            alert(json.message || 'Gagal menyimpan pengaturan.');
+          }
+        } catch (err) {
+          alert('Gagal menyimpan: ' + err.message);
+        } finally {
+          btnSaveSettings.disabled = false;
+          btnSaveSettings.innerHTML = '<i data-lucide="save"></i> Simpan Pengaturan';
+          if (window.lucide) lucide.createIcons();
+        }
+      });
+    }
   }
 
   // Loads stats + report history for the "Kelola Database" tab (lazy-loaded on tab click)
@@ -1283,6 +1330,22 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     } catch (e) {
       console.warn('Gagal memuat info database', e);
+    }
+
+    // 1b. Fetch Settings
+    try {
+      const res = await fetch('/api/settings');
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.settings) {
+          const inputDays = document.getElementById('input-setting-deadstock-days');
+          if (inputDays && json.settings.deadStockDays) {
+            inputDays.value = json.settings.deadStockDays;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Gagal memuat pengaturan', e);
     }
 
     // 2. Fetch Dates List

@@ -272,6 +272,38 @@ const server = http.createServer((req, res) => {
     return sendJson(req, res, 200, { success: true, siteName: process.env.SITE_NAME || 'Bee Accounting' });
   }
 
+  // Settings API: admin config for dead stock threshold, etc.
+  if (req.method === 'GET' && pathname === '/api/settings') {
+    try {
+      const settings = db.getAllSettings();
+      return sendJson(req, res, 200, { success: true, settings });
+    } catch (err) {
+      return sendJson(req, res, 500, { success: false, message: err.message });
+    }
+  }
+
+  if (req.method === 'POST' && pathname === '/api/settings') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const payload = JSON.parse(body || '{}');
+        if (payload.deadStockDays !== undefined) {
+          const val = parseInt(payload.deadStockDays, 10);
+          if (isNaN(val) || val < 1 || val > 365) {
+            return sendJson(req, res, 400, { success: false, message: 'Ambang batas dead stock harus antara 1 sampai 365 hari.' });
+          }
+          db.setSetting('deadStockDays', val);
+        }
+        const updated = db.getAllSettings();
+        return sendJson(req, res, 200, { success: true, settings: updated, message: 'Pengaturan berhasil disimpan!' });
+      } catch (err) {
+        return sendJson(req, res, 500, { success: false, message: err.message });
+      }
+    });
+    return;
+  }
+
   // 1. Stock Dates & Data
   if (req.method === 'GET' && pathname === '/api/dates') {
     try {

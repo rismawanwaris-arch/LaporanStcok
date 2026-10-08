@@ -250,6 +250,13 @@ class StockDatabase {
       CREATE INDEX IF NOT EXISTS idx_purch_date ON purchase_records(purchase_date);
       CREATE INDEX IF NOT EXISTS idx_purch_outlet ON purchase_records(outlet);
       CREATE INDEX IF NOT EXISTS idx_purch_item ON purchase_records(item_code);
+
+      -- 4. Application Configuration & Analytics Settings
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
     `);
   }
 
@@ -583,6 +590,17 @@ class StockDatabase {
       GROUP BY item_code, outlet
     `).all();
 
+    // 4b. Fetch historical last sale date per item per outlet (across all sales records)
+    const lastSalePerOutletRows = this.db.prepare(`
+      SELECT item_code, outlet, MAX(transaction_date) as last_sale_date
+      FROM sales_records
+      GROUP BY item_code, outlet
+    `).all();
+    const lastSalePerOutletMap = {};
+    lastSalePerOutletRows.forEach(r => {
+      lastSalePerOutletMap[`${r.item_code}|${r.outlet}`] = r.last_sale_date;
+    });
+
     // 5. Build merged map of items and outlets
     const itemsMap = {};
     const outletsSet = new Set();
@@ -615,7 +633,10 @@ class StockDatabase {
           purchased: 0,
           ads: 0,
           doc: Infinity,
-          status: 'NO_DATA'
+          status: 'NO_DATA',
+          lastSaleDate: null,
+          agingDays: null,
+          neverSold: true
         };
       }
       return itemObj.outlets[outlet];
@@ -647,13 +668,27 @@ class StockDatabase {
       item.totalPurchased += r.total_purchased;
     });
 
-    // Compute Days of Coverage & Status for every item-outlet combo
+    // 6. Compute Days of Coverage, Outlet Aging & Status for every item-outlet combo
+    const deadStockDaysSetting = parseInt(this.getSetting('deadStockDays', '30'), 10) || 30;
+
+    function daysBetween(a, b) {
+      if (!a || !b) return null;
+      const d1 = new Date(a + 'T00:00:00Z').getTime();
+      const d2 = new Date(b + 'T00:00:00Z').getTime();
+      return Math.round((d1 - d2) / 86400000);
+    }
+
     Object.values(itemsMap).forEach(item => {
       const itemADS = +(item.totalSold / numSalesDays).toFixed(2);
       item.totalADS = itemADS;
       item.globalDoC = itemADS > 0 ? +(item.totalStock / itemADS).toFixed(1) : (item.totalStock > 0 ? 999 : 0);
 
       Object.entries(item.outlets).forEach(([outlet, out]) => {
+        const lastSaleDate = lastSalePerOutletMap[`${item.code}|${outlet}`] || null;
+        out.lastSaleDate = lastSaleDate;
+        out.neverSold = !lastSaleDate;
+        out.agingDays = lastSaleDate && targetStockDate ? Math.max(0, daysBetween(targetStockDate, lastSaleDate)) : null;
+
         if (out.ads > 0) {
           out.doc = +(out.stock / out.ads).toFixed(1);
           if (out.stock === 0) {
@@ -668,10 +703,15 @@ class StockDatabase {
             out.status = 'OVERSTOCK';
           }
         } else {
-          // No sales in this window
+          // No sales in this selected window
           if (out.stock > 0) {
             out.doc = 999;
-            out.status = 'DEAD_STOCK'; // Holding stock, zero velocity
+            // DEAD_STOCK hanya jika diverifikasi tidak laku >= deadStockDays atau belum pernah laku sama sekali
+            if (out.neverSold || (out.agingDays !== null && out.agingDays >= deadStockDaysSetting)) {
+              out.status = 'DEAD_STOCK'; // Terbukti dead stock historis
+            } else {
+              out.status = 'IDLE'; // Hanya stagnan di window pendek, bukan dead stock
+            }
           } else {
             out.doc = 0;
             out.status = 'EMPTY';
@@ -687,7 +727,8 @@ class StockDatabase {
       totalItemsCount: Object.keys(itemsMap).length,
       allOutlets: Array.from(outletsSet),
       items: itemsMap,
-      availableItemGroups: this.getDistinctItemGroups()
+      availableItemGroups: this.getDistinctItemGroups(),
+      deadStockDaysSetting
     };
   }
 
@@ -917,6 +958,10 @@ class StockDatabase {
       abcClassMap[r.code] = cumPct <= 80 ? 'A' : (cumPct <= 95 ? 'B' : 'C');
     });
 
+    const deadStockDaysSetting = parseInt(this.getSetting('deadStockDays', '30'), 10) || 30;
+    const threshold1 = Math.max(3, Math.round(deadStockDaysSetting * 0.25)); // misal 7 hari jika dead=30
+    const threshold2 = Math.max(7, Math.round(deadStockDaysSetting * 0.5));  // misal 14 hari jika dead=30
+
     function daysBetween(a, b) {
       const d1 = new Date(a + 'T00:00:00Z').getTime();
       const d2 = new Date(b + 'T00:00:00Z').getTime();
@@ -925,10 +970,10 @@ class StockDatabase {
 
     function agingBucketFor(agingDays, neverSold) {
       if (neverSold) return 'NEVER_SOLD';
-      if (agingDays <= 7) return 'FRESH';          // 0-7 hari: putaran cepat mingguan
-      if (agingDays <= 14) return 'SLOW_7_14';     // 8-14 hari: mulai melambat (1-2 minggu)
-      if (agingDays <= 30) return 'AGING_15_30';   // 15-30 hari: macet / kritis perputaran uang
-      return 'DEAD_STOCK';                         // > 30 hari: Dead stock konter pulsa (cashflow macet)
+      if (agingDays <= threshold1) return 'FRESH';
+      if (agingDays <= threshold2) return 'SLOW_7_14';
+      if (agingDays <= deadStockDaysSetting) return 'AGING_15_30';
+      return 'DEAD_STOCK'; // > deadStockDaysSetting
     }
 
     const items = currentStockRows.map(r => {
@@ -1399,6 +1444,34 @@ class StockDatabase {
       VACUUM;
     `);
     return true;
+  }
+
+  getSetting(key, defaultValue = null) {
+    const row = this.db.prepare(`SELECT value FROM app_settings WHERE key = ?`).get(key);
+    if (!row) return defaultValue;
+    return row.value;
+  }
+
+  setSetting(key, value) {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO app_settings (key, value, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).run(key, String(value), now);
+    return true;
+  }
+
+  getAllSettings() {
+    const rows = this.db.prepare(`SELECT key, value FROM app_settings`).all();
+    const map = {
+      deadStockDays: 30, // default konter pulsa: 30 hari
+    };
+    rows.forEach(r => {
+      const num = parseInt(r.value, 10);
+      map[r.key] = isNaN(num) ? r.value : num;
+    });
+    return map;
   }
 
   close() {
