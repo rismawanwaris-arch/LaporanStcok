@@ -449,7 +449,7 @@
           <label for="coverage-days-filter"><i data-lucide="calendar-range" style="width: 16px; height: 16px; display: inline;"></i> Periode ADS:</label>
           <select id="coverage-days-filter">
             <option value="1">1 Hari Terakhir</option>
-            <option value="7">7 Hari Terakhir</option>
+            <option value="7" selected>7 Hari Terakhir (Disarankan)</option>
             <option value="14">14 Hari Terakhir</option>
             <option value="30">30 Hari Terakhir</option>
           </select>
@@ -459,11 +459,14 @@
           <label for="coverage-status-filter"><i data-lucide="filter" style="width: 16px; height: 16px; display: inline;"></i> Status Ketahanan:</label>
           <select id="coverage-status-filter">
             <option value="ALL">-- Semua Status --</option>
-            <option value="CRITICAL">🔴 Kritis (&lt; 2 Hari)</option>
+            <option value="MUST_HAVE">🔥 Wajib Ada / Tidak Boleh Kosong</option>
+            <option value="OUT_OF_STOCK">🚨 Stok Kosong (0 PCS di Cabang)</option>
+            <option value="CRITICAL">🔴 Kritis (&lt; 2 Hari / Hampir Habis)</option>
             <option value="WARNING">🟡 Waspada (2 - 5 Hari)</option>
             <option value="OPTIMAL">🟢 Optimal (6 - 14 Hari)</option>
-            <option value="OVERSTOCK">🔵 Overstock (&gt; 20 Hari)</option>
-            <option value="DEAD_STOCK">⚪ Dead Stock (0 Penjualan)</option>
+            <option value="OVERSTOCK">🔵 Overstock (&gt; 14 Hari)</option>
+            <option value="IDLE">⏸️ Stok Pasif / Belum Bergerak</option>
+            <option value="DEAD_STOCK">⚫ Dead Stock Terverifikasi</option>
           </select>
         </div>
 
@@ -559,7 +562,7 @@
           </div>
           <div class="card-details">
             <h3>Target Coverage Jaringan</h3>
-            <div class="card-value">14 Hari</div>
+            <div class="card-value">7 Hari</div>
           </div>
         </div>
       </section>
@@ -570,7 +573,7 @@
           <label for="po-days-filter"><i data-lucide="calendar-range" style="width: 16px; height: 16px; display: inline;"></i> Periode ADS:</label>
           <select id="po-days-filter">
             <option value="1">1 Hari Terakhir</option>
-            <option value="7">7 Hari Terakhir</option>
+            <option value="7" selected>7 Hari Terakhir (Disarankan)</option>
             <option value="14">14 Hari Terakhir</option>
             <option value="30">30 Hari Terakhir</option>
           </select>

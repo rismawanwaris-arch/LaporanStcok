@@ -548,8 +548,15 @@ class StockDatabase {
    * @param {string} [stockDate] - Specific stock date or latest
    * @param {number} [daysWindow=1] - Days of sales to consider for ADS
    */
-  getIntegratedData(stockDate, daysWindow = 1) {
+  getIntegratedData(stockDate, daysWindow = 7) {
     const itemGroupMap = this.getItemGroupByCode();
+
+    function daysBetween(a, b) {
+      if (!a || !b) return null;
+      const d1 = new Date(a + 'T00:00:00Z').getTime();
+      const d2 = new Date(b + 'T00:00:00Z').getTime();
+      return Math.round((d1 - d2) / 86400000);
+    }
 
     // 1. Pick stock date
     let targetStockDate = stockDate;
@@ -567,11 +574,23 @@ class StockDatabase {
         `).all(targetStockDate)
       : [];
 
-    // 3. Fetch sales aggregation
-    // If daysWindow is 1, take sales from latest sales date or all sales dates
+    // 3. Fetch sales aggregation in the selected window
     const salesDates = this.db.prepare(`SELECT DISTINCT transaction_date FROM sales_records ORDER BY transaction_date DESC`).all().map(r => r.transaction_date);
     const activeSalesDates = salesDates.slice(0, Math.max(1, daysWindow));
-    
+    const totalHistoricalSalesDays = Math.max(1, salesDates.length);
+
+    // Determine the calendar span of historical data in the DB
+    const earliestStockRow = this.db.prepare(`SELECT MIN(report_date) as min_date FROM reports`).get();
+    const earliestSaleDate = salesDates.length > 0 ? salesDates[salesDates.length - 1] : null;
+    const earliestStockDate = earliestStockRow ? earliestStockRow.min_date : null;
+    let earliestHistoryDate = earliestSaleDate || earliestStockDate;
+    if (earliestSaleDate && earliestStockDate) {
+      earliestHistoryDate = earliestSaleDate < earliestStockDate ? earliestSaleDate : earliestStockDate;
+    }
+    const historySpanDays = (targetStockDate && earliestHistoryDate)
+      ? Math.max(1, daysBetween(targetStockDate, earliestHistoryDate) + 1)
+      : totalHistoricalSalesDays;
+
     let salesAgg = [];
     if (activeSalesDates.length > 0) {
       const placeholders = activeSalesDates.map(() => '?').join(',');
@@ -583,43 +602,114 @@ class StockDatabase {
       `).all(...activeSalesDates);
     }
 
-    // 4. Fetch purchase aggregation
+    // 4. Fetch purchase aggregation & latest purchase date per item+outlet and per item globally
     const purchAgg = this.db.prepare(`
-      SELECT item_code, item_name, outlet, SUM(qty) as total_purchased, SUM(subtotal) as total_cost
+      SELECT item_code, item_name, outlet, SUM(qty) as total_purchased, SUM(subtotal) as total_cost,
+             MAX(purchase_date) as last_purchase_date
       FROM purchase_records
       GROUP BY item_code, outlet
     `).all();
 
-    // 4b. Fetch historical last sale date per item per outlet (across all sales records)
-    const lastSalePerOutletRows = this.db.prepare(`
-      SELECT item_code, outlet, MAX(transaction_date) as last_sale_date
+    const itemPurchaseMap = {};
+    this.db.prepare(`
+      SELECT item_code,
+             MAX(purchase_date) as last_purchase_date,
+             AVG(CASE WHEN unit_price > 0 THEN unit_price ELSE NULL END) as avg_unit_cost,
+             SUM(qty) as total_purchased_global
+      FROM purchase_records
+      GROUP BY item_code
+    `).all().forEach(r => {
+      itemPurchaseMap[r.item_code] = r;
+    });
+
+    // 4b. Fetch all-time historical sales per item per outlet (catches branches that are 0-stock & 0-sale in short window!)
+    const historicalOutletSalesRows = this.db.prepare(`
+      SELECT item_code, item_name, outlet,
+             MAX(transaction_date) as last_sale_date,
+             SUM(qty) as all_time_sold,
+             SUM(subtotal) as all_time_revenue,
+             COUNT(DISTINCT transaction_date) as active_sale_days
       FROM sales_records
       GROUP BY item_code, outlet
     `).all();
     const lastSalePerOutletMap = {};
-    lastSalePerOutletRows.forEach(r => {
-      lastSalePerOutletMap[`${r.item_code}|${r.outlet}`] = r.last_sale_date;
+    const historicalOutletSalesMap = {};
+    historicalOutletSalesRows.forEach(r => {
+      const key = `${r.item_code}|${r.outlet}`;
+      lastSalePerOutletMap[key] = r.last_sale_date;
+      historicalOutletSalesMap[key] = r;
+    });
+
+    // 4c. Fetch unit cost (COGS) & sell price from sales_records per item
+    const itemCostFromSalesMap = {};
+    this.db.prepare(`
+      SELECT item_code,
+             AVG(CASE WHEN cogs > 0 THEN cogs ELSE NULL END) as avg_cogs,
+             AVG(CASE WHEN sell_price > 0 THEN sell_price ELSE NULL END) as avg_sell_price,
+             SUM(subtotal) as all_time_revenue,
+             SUM(qty) as all_time_qty,
+             COUNT(DISTINCT CASE WHEN outlet != 'GDG' THEN outlet ELSE NULL END) as outlets_selling_count
+      FROM sales_records
+      GROUP BY item_code
+    `).all().forEach(r => {
+      itemCostFromSalesMap[r.item_code] = r;
+    });
+
+    // 4d. Track which merks/categories each retail outlet actively carries so "Must-Have" items
+    // are only enforced on outlets that actually sell that merk/category (e.g. don't force VOUCHER on PETSHOP).
+    const outletMerksMap = {}; // outlet -> Set(merk)
+    const outletGroupsMap = {}; // outlet -> Set(itemGroup)
+    const itemMerkLookup = {};
+    this.db.prepare(`SELECT DISTINCT item_code, merk, outlet FROM stock_records WHERE outlet != 'GDG'`).all().forEach(r => {
+      itemMerkLookup[r.item_code] = r.merk;
+      if (!outletMerksMap[r.outlet]) outletMerksMap[r.outlet] = new Set();
+      outletMerksMap[r.outlet].add(r.merk);
+    });
+    historicalOutletSalesRows.forEach(r => {
+      if (r.outlet === 'GDG') return;
+      const grp = itemGroupMap[r.item_code];
+      if (grp) {
+        if (!outletGroupsMap[r.outlet]) outletGroupsMap[r.outlet] = new Set();
+        outletGroupsMap[r.outlet].add(grp);
+      }
+      const mrk = itemMerkLookup[r.item_code];
+      if (mrk) {
+        if (!outletMerksMap[r.outlet]) outletMerksMap[r.outlet] = new Set();
+        outletMerksMap[r.outlet].add(mrk);
+      }
     });
 
     // 5. Build merged map of items and outlets
     const itemsMap = {};
     const outletsSet = new Set();
+    const lastPurchPerOutletMap = {};
 
     function ensureItem(code, name, merk) {
+      const resolvedMerk = merk || itemMerkLookup[code] || 'LAINNYA';
       if (!itemsMap[code]) {
+        const pInfo = itemPurchaseMap[code];
+        const sInfo = itemCostFromSalesMap[code];
+        const unitCost = (pInfo && pInfo.avg_unit_cost) || (sInfo && sInfo.avg_cogs) || (sInfo && sInfo.avg_sell_price ? sInfo.avg_sell_price * 0.85 : 0);
         itemsMap[code] = {
           code,
           name: name || '',
-          merk: merk || 'LAINNYA',
+          merk: resolvedMerk,
           itemGroup: itemGroupMap[code] || 'LAINNYA',
           totalStock: 0,
+          gdgStock: 0,
           totalSold: 0,
           totalPurchased: 0,
+          unitCost: Math.round(unitCost || 0),
+          sellPrice: Math.round((sInfo && sInfo.avg_sell_price) || 0),
+          lastPurchaseDate: (pInfo && pInfo.last_purchase_date) || null,
+          outletsSellingCount: (sInfo && sInfo.outlets_selling_count) || 0,
+          isMustHave: false,
+          abcClass: '-',
           outlets: {}
         };
       } else {
         if (!itemsMap[code].name && name) itemsMap[code].name = name;
-        if (itemsMap[code].merk === 'LAINNYA' && merk) itemsMap[code].merk = merk;
+        if (itemsMap[code].merk === 'LAINNYA' && resolvedMerk !== 'LAINNYA') itemsMap[code].merk = resolvedMerk;
       }
       return itemsMap[code];
     }
@@ -630,34 +720,53 @@ class StockDatabase {
         itemObj.outlets[outlet] = {
           stock: 0,
           sold: 0,
+          daysActive: 0,
           purchased: 0,
           ads: 0,
+          rawADS: 0,
+          historicalADS: 0,
+          isHistoricalDemand: false,
+          isMustHaveStockout: false,
           doc: Infinity,
           status: 'NO_DATA',
           lastSaleDate: null,
+          lastPurchaseDate: null,
           agingDays: null,
+          purchaseAgeDays: null,
+          isNewStock: false,
           neverSold: true
         };
       }
       return itemObj.outlets[outlet];
     }
 
-    // Populate stock
+    // Populate current stock
     stockRows.forEach(r => {
       const item = ensureItem(r.item_code, r.item_name, r.merk);
       const out = ensureOutlet(item, r.outlet);
       out.stock = r.stock;
       item.totalStock += r.stock;
+      if (r.outlet === 'GDG') item.gdgStock += r.stock;
     });
 
-    // Populate sales
+    // Populate sales in window
     const numSalesDays = Math.max(1, activeSalesDates.length);
     salesAgg.forEach(r => {
       const item = ensureItem(r.item_code, r.item_name);
       const out = ensureOutlet(item, r.outlet);
       out.sold = r.total_sold;
+      out.daysActive = r.days_active || 1;
       item.totalSold += r.total_sold;
-      out.ads = +(r.total_sold / numSalesDays).toFixed(2);
+      out.rawADS = +(r.total_sold / numSalesDays).toFixed(2);
+      out.ads = out.rawADS;
+    });
+
+    // Populate historical sales outlets even if 0 stock today & 0 sold in short window
+    // This solves the "Zero-Stock / Zero-Sale Paradox" where an already-empty branch was invisible!
+    historicalOutletSalesRows.forEach(r => {
+      const item = ensureItem(r.item_code, r.item_name);
+      const out = ensureOutlet(item, r.outlet);
+      out.historicalADS = +(r.all_time_sold / totalHistoricalSalesDays).toFixed(2);
     });
 
     // Populate purchases
@@ -665,37 +774,105 @@ class StockDatabase {
       const item = ensureItem(r.item_code, r.item_name);
       const out = ensureOutlet(item, r.outlet);
       out.purchased = r.total_purchased;
+      out.lastPurchaseDate = r.last_purchase_date || null;
+      lastPurchPerOutletMap[`${r.item_code}|${r.outlet}`] = r.last_purchase_date;
       item.totalPurchased += r.total_purchased;
     });
 
-    // 6. Compute Days of Coverage, Outlet Aging & Status for every item-outlet combo
-    const deadStockDaysSetting = parseInt(this.getSetting('deadStockDays', '30'), 10) || 30;
+    // 5b. Compute Pareto ABC Class & "Must-Have (Tidak Boleh Kosong)" status across the network
+    let totalNetworkRevenue = 0;
+    const revenueRankedItems = Object.values(itemsMap).map(item => {
+      const sInfo = itemCostFromSalesMap[item.code];
+      const rev = (sInfo && sInfo.all_time_revenue) || (item.totalSold * item.sellPrice) || 0;
+      totalNetworkRevenue += rev;
+      return { code: item.code, rev };
+    }).filter(x => x.rev > 0).sort((a, b) => b.rev - a.rev);
 
-    function daysBetween(a, b) {
-      if (!a || !b) return null;
-      const d1 = new Date(a + 'T00:00:00Z').getTime();
-      const d2 = new Date(b + 'T00:00:00Z').getTime();
-      return Math.round((d1 - d2) / 86400000);
-    }
+    let cumRev = 0;
+    revenueRankedItems.forEach(x => {
+      cumRev += x.rev;
+      const pct = totalNetworkRevenue > 0 ? (cumRev / totalNetworkRevenue) * 100 : 100;
+      itemsMap[x.code].abcClass = pct <= 80 ? 'A' : (pct <= 95 ? 'B' : 'C');
+    });
+
+    const retailOutletsList = Array.from(outletsSet).filter(o => o !== 'GDG');
+    const minOutletsForMustHave = Math.max(3, Math.ceil(retailOutletsList.length * 0.2));
 
     Object.values(itemsMap).forEach(item => {
-      const itemADS = +(item.totalSold / numSalesDays).toFixed(2);
-      item.totalADS = itemADS;
-      item.globalDoC = itemADS > 0 ? +(item.totalStock / itemADS).toFixed(1) : (item.totalStock > 0 ? 999 : 0);
+      const rawGlobalADS = +(item.totalSold / numSalesDays).toFixed(2);
+      const sInfo = itemCostFromSalesMap[item.code];
+      const historicalGlobalADS = sInfo ? +(sInfo.all_time_qty / totalHistoricalSalesDays).toFixed(2) : 0;
+      item.totalADS = Math.max(rawGlobalADS, historicalGlobalADS);
+
+      // An item is "Must-Have / Tidak Boleh Kosong" if it's Class A (or fast-moving >= 2 pcs/day)
+      // AND demanded across >= 20% of retail branches (min 3 branches)
+      item.isMustHave = (item.abcClass === 'A' || item.totalADS >= 2) && item.outletsSellingCount >= minOutletsForMustHave;
+
+      // For Must-Have items, ensure all retail outlets that carry this merk & itemGroup are tracked
+      // so if any matching branch has 0 stock, it gets flagged!
+      if (item.isMustHave) {
+        retailOutletsList.forEach(outlet => {
+          const carriesMerk = outletMerksMap[outlet] && outletMerksMap[outlet].has(item.merk);
+          const carriesGroup = item.itemGroup === 'LAINNYA' || (outletGroupsMap[outlet] && outletGroupsMap[outlet].has(item.itemGroup));
+          if (carriesMerk && carriesGroup) {
+            ensureOutlet(item, outlet);
+          }
+        });
+      }
+    });
+
+    // 6. Compute Days of Coverage, True Velocity, Outlet Aging & Status for every item-outlet combo
+    const deadStockDaysSetting = parseInt(this.getSetting('deadStockDays', '30'), 10) || 30;
+
+    Object.values(itemsMap).forEach(item => {
+      item.globalDoC = item.totalADS > 0 ? +(item.totalStock / item.totalADS).toFixed(1) : (item.totalStock > 0 ? 999 : 0);
+      item.emptyOutletsCount = 0;
+      item.criticalOutletsCount = 0;
 
       Object.entries(item.outlets).forEach(([outlet, out]) => {
         const lastSaleDate = lastSalePerOutletMap[`${item.code}|${outlet}`] || null;
+        const lastPurchDate = lastPurchPerOutletMap[`${item.code}|${outlet}`] || item.lastPurchaseDate || null;
         out.lastSaleDate = lastSaleDate;
+        out.lastPurchaseDate = lastPurchDate;
         out.neverSold = !lastSaleDate;
         out.agingDays = lastSaleDate && targetStockDate ? Math.max(0, daysBetween(targetStockDate, lastSaleDate)) : null;
+        out.purchaseAgeDays = lastPurchDate && targetStockDate ? Math.max(0, daysBetween(targetStockDate, lastPurchDate)) : null;
+        out.isNewStock = out.purchaseAgeDays !== null && out.purchaseAgeDays < deadStockDaysSetting;
+
+        // Censored Demand Correction:
+        // 1) If branch sold out during a multi-day window (stock === 0 today, sold > 0 on fewer days than numSalesDays),
+        //    blend in-stock sale days with window days so ADS isn't artificially depressed by stockout days.
+        if (out.sold > 0 && out.stock === 0 && numSalesDays > 1 && out.daysActive < numSalesDays) {
+          const effectiveDays = Math.max(1, (out.daysActive + numSalesDays) / 2);
+          out.ads = +(out.sold / effectiveDays).toFixed(2);
+        }
+        // 2) If branch had 0 sales in current short window AND has 0 stock today,
+        //    check if this branch historically sells this item (or if it's a Must-Have item for this branch)!
+        else if (out.sold === 0 && out.stock === 0 && outlet !== 'GDG') {
+          if (out.historicalADS > 0) {
+            out.ads = out.historicalADS;
+            out.isHistoricalDemand = true;
+          } else if (item.isMustHave) {
+            out.ads = Math.max(0.5, +(item.totalADS / Math.max(1, item.outletsSellingCount)).toFixed(2));
+            out.isMustHaveStockout = true;
+          }
+        }
+
+        if (outlet === 'GDG') {
+          out.doc = item.totalADS > 0 ? +(out.stock / item.totalADS).toFixed(1) : (out.stock > 0 ? 999 : 0);
+          out.status = out.stock > 0 ? 'GUDANG_READY' : 'EMPTY';
+          return;
+        }
 
         if (out.ads > 0) {
           out.doc = +(out.stock / out.ads).toFixed(1);
           if (out.stock === 0) {
-            out.status = 'OUT_OF_STOCK'; // 0 stock but selling!
-          } else if (out.doc < 2) {
+            out.status = 'OUT_OF_STOCK'; // 0 stock on an item demanded at this branch!
+            item.emptyOutletsCount += 1;
+          } else if (out.doc < 2 || (item.isMustHave && out.stock <= 1)) {
             out.status = 'CRITICAL';
-          } else if (out.doc < 5) {
+            item.criticalOutletsCount += 1;
+          } else if (out.doc < 5 || (item.isMustHave && out.stock <= 2)) {
             out.status = 'WARNING';
           } else if (out.doc <= 14) {
             out.status = 'OPTIMAL';
@@ -703,14 +880,24 @@ class StockDatabase {
             out.status = 'OVERSTOCK';
           }
         } else {
-          // No sales in this selected window
+          // No active/historical sales demand at this branch
           if (out.stock > 0) {
             out.doc = 999;
-            // DEAD_STOCK hanya jika diverifikasi tidak laku >= deadStockDays atau belum pernah laku sama sekali
-            if (out.neverSold || (out.agingDays !== null && out.agingDays >= deadStockDaysSetting)) {
-              out.status = 'DEAD_STOCK'; // Terbukti dead stock historis
+            // Verified Dead Stock Logic:
+            // - Never mark as DEAD_STOCK if newly purchased within < deadStockDaysSetting
+            // - If it has a past sale date, require agingDays >= deadStockDaysSetting
+            // - If neverSold at this branch, require historySpanDays >= deadStockDaysSetting
+            //   (or if DB history is still short, only flag as DEAD_STOCK if global sales = 0 across all 42 branches
+            //    and stock >= 3; otherwise classify as IDLE so 1-2 pcs display stock isn't falsely called Dead Stock!)
+            const isConfirmedOldUnsold = !out.isNewStock && (
+              (out.agingDays !== null && out.agingDays >= deadStockDaysSetting) ||
+              (out.neverSold && historySpanDays >= deadStockDaysSetting) ||
+              (out.neverSold && item.totalADS === 0 && out.stock >= 5)
+            );
+            if (isConfirmedOldUnsold) {
+              out.status = 'DEAD_STOCK';
             } else {
-              out.status = 'IDLE'; // Hanya stagnan di window pendek, bukan dead stock
+              out.status = 'IDLE'; // Stagnan jangka pendek / stok pajangan / stok baru masuk
             }
           } else {
             out.doc = 0;
@@ -724,6 +911,8 @@ class StockDatabase {
       stockDate: targetStockDate,
       salesDates: activeSalesDates,
       salesDaysCount: numSalesDays,
+      totalHistoricalSalesDays,
+      historySpanDays,
       totalItemsCount: Object.keys(itemsMap).length,
       allOutlets: Array.from(outletsSet),
       items: itemsMap,
@@ -732,19 +921,6 @@ class StockDatabase {
     };
   }
 
-  /**
-   * Analyzes recurring stockouts over a rolling window of daily stock reports,
-   * cross-referenced with sales velocity, to surface items that sell well but
-   * are chronically out of stock ("habit" tracking across daily uploads).
-   *
-   * Note: stock_records only stores rows where stock > 0 (see saveReport), so a
-   * report_date with no row for a given item+outlet is treated as a 0-stock day
-   * for that item+outlet — valid as long as the daily CSV export always lists
-   * every item in a merk section (Bee Accounting exports do), even at 0 stock.
-   *
-   * @param {number} [days=30] - How many of the most recent daily stock reports to include
-   * @param {number} [chronicThresholdPct=20] - Min avg stockout rate (%) to flag an item as "chronic"
-   */
   /**
    * Maps item_code -> item_group ("VOUCHER", "PETSHOP", "ACC CAMPURAN NEW",
    * etc.) from sales history. Only sales_records carries this category field
@@ -770,6 +946,18 @@ class StockDatabase {
     `).all().map(r => r.item_group);
   }
 
+  /**
+   * Analyzes recurring stockouts over a rolling window of daily stock reports,
+   * cross-referenced with sales velocity, to surface items that sell well but
+   * are chronically out of stock ("habit" tracking across daily uploads).
+   *
+   * Excludes GDG (central warehouse) from retail branch stockout counts and
+   * includes branches that historically sell an item even if they had 0 stock
+   * across the entire window (solving the Zero-Stock / Zero-Sale blind spot).
+   *
+   * @param {number} [days=30] - How many of the most recent daily stock reports to include
+   * @param {number} [chronicThresholdPct=20] - Min avg stockout rate (%) to flag an item as "chronic"
+   */
   getStockoutHistory(days = 30, chronicThresholdPct = 20) {
     const reportDates = this.db.prepare(`
       SELECT report_date FROM reports ORDER BY report_date DESC LIMIT ?
@@ -779,17 +967,16 @@ class StockDatabase {
       return { days, reportDatesCount: 0, dateRange: null, chronicThresholdPct, items: [], outletSummary: [], availableItemGroups: this.getDistinctItemGroups() };
     }
 
+    const latestReportDate = reportDates[reportDates.length - 1];
     const stockPlaceholders = reportDates.map(() => '?').join(',');
 
+    // Exclude GDG from retail stockout tracking (GDG is a supply warehouse, not a retail counter)
     const stockRows = this.db.prepare(`
       SELECT report_date, merk, item_code, item_name, outlet, stock
       FROM stock_records
-      WHERE report_date IN (${stockPlaceholders})
+      WHERE report_date IN (${stockPlaceholders}) AND outlet != 'GDG'
     `).all(...reportDates);
 
-    // Sales are uploaded on their own cadence, independent of stock report dates
-    // (see getIntegratedData) — so the sales window is its own set of recent
-    // transaction dates rather than reusing reportDates.
     const salesDates = this.db.prepare(`
       SELECT DISTINCT transaction_date FROM sales_records ORDER BY transaction_date DESC LIMIT ?
     `).all(days).map(r => r.transaction_date);
@@ -801,20 +988,30 @@ class StockDatabase {
       salesRows = this.db.prepare(`
         SELECT item_code, item_name, outlet, SUM(qty) as total_sold
         FROM sales_records
-        WHERE transaction_date IN (${salesPlaceholders})
+        WHERE transaction_date IN (${salesPlaceholders}) AND outlet != 'GDG'
         GROUP BY item_code, outlet
       `).all(...salesDates);
     }
 
+    // Also fetch all-time historical assortment per (item_code, outlet) so a branch
+    // that was 100% out of stock during the entire window (0 stock & therefore 0 sales in window)
+    // is still caught as 100% stockout!
+    const historicalAssortmentRows = this.db.prepare(`
+      SELECT DISTINCT item_code, item_name, outlet FROM sales_records WHERE outlet != 'GDG'
+      UNION
+      SELECT DISTINCT item_code, item_name, outlet FROM stock_records WHERE outlet != 'GDG'
+    `).all();
+
     const itemGroupMap = this.getItemGroupByCode();
     const totalWindowDays = reportDates.length;
-    const itemMap = {}; // item_code -> { name, merk, outlets: { outlet -> Set(reportDatesInStock) }, totalSold }
+    const itemMap = {};
 
     function ensureItem(code, name, merk) {
       if (!itemMap[code]) {
         itemMap[code] = { code, name: name || code, merk: merk || 'LAINNYA', outlets: {}, totalSold: 0 };
-      } else if (!itemMap[code].name && name) {
-        itemMap[code].name = name;
+      } else {
+        if ((!itemMap[code].name || itemMap[code].name === code) && name) itemMap[code].name = name;
+        if (itemMap[code].merk === 'LAINNYA' && merk) itemMap[code].merk = merk;
       }
       return itemMap[code];
     }
@@ -828,35 +1025,46 @@ class StockDatabase {
     salesRows.forEach(r => {
       const item = ensureItem(r.item_code, r.item_name, null);
       item.totalSold += r.total_sold;
-      if (!item.outlets[r.outlet]) item.outlets[r.outlet] = new Set(); // sold here but never seen in stock_records -> 100% stockout
+      if (!item.outlets[r.outlet]) item.outlets[r.outlet] = new Set();
+    });
+
+    historicalAssortmentRows.forEach(r => {
+      const item = ensureItem(r.item_code, r.item_name, null);
+      if (!item.outlets[r.outlet]) item.outlets[r.outlet] = new Set();
     });
 
     const outletTotals = {}; // outlet -> { totalStockoutDays, itemsAffected }
 
     const items = Object.values(itemMap).map(item => {
+      let currentlyEmptyCount = 0;
       const outletDetails = Object.entries(item.outlets).map(([outlet, dateSet]) => {
         const daysInStock = dateSet.size;
         const daysOutOfStock = totalWindowDays - daysInStock;
         const stockoutRate = +(daysOutOfStock / totalWindowDays * 100).toFixed(1);
+        const isCurrentlyEmpty = !dateSet.has(latestReportDate);
+        if (isCurrentlyEmpty) currentlyEmptyCount += 1;
 
-        if (daysOutOfStock > 0) {
+        if (daysOutOfStock > 0 && item.totalSold > 0) {
           if (!outletTotals[outlet]) outletTotals[outlet] = { outlet, totalStockoutDays: 0, itemsAffected: 0 };
           outletTotals[outlet].totalStockoutDays += daysOutOfStock;
           outletTotals[outlet].itemsAffected += 1;
         }
 
-        return { outlet, daysInStock, daysOutOfStock, stockoutRate };
-      }).sort((a, b) => b.daysOutOfStock - a.daysOutOfStock);
+        return { outlet, daysInStock, daysOutOfStock, stockoutRate, isCurrentlyEmpty };
+      }).sort((a, b) => {
+        if (b.daysOutOfStock !== a.daysOutOfStock) return b.daysOutOfStock - a.daysOutOfStock;
+        return (b.isCurrentlyEmpty ? 1 : 0) - (a.isCurrentlyEmpty ? 1 : 0);
+      });
 
       const worstOutlet = outletDetails[0] || null;
       const avgStockoutRate = outletDetails.length > 0
         ? +(outletDetails.reduce((s, o) => s + o.stockoutRate, 0) / outletDetails.length).toFixed(1)
         : 0;
       const ads = +(item.totalSold / numSalesDays).toFixed(2);
-      // Chronic problem score: only meaningful for items that actually sell —
-      // rewards items that are both fast-moving AND frequently unavailable.
-      const problemScore = +(ads * avgStockoutRate).toFixed(2);
-      const isChronic = ads > 0 && avgStockoutRate >= chronicThresholdPct;
+      const isMustHave = ads >= 2 && outletDetails.length >= 4;
+      // Problem score rewards high velocity, high stockout frequency, and currently empty branches
+      const problemScore = +(ads * avgStockoutRate * (1 + Math.min(0.5, currentlyEmptyCount * 0.05))).toFixed(2);
+      const isChronic = ads > 0 && (avgStockoutRate >= chronicThresholdPct || (isMustHave && currentlyEmptyCount >= 2));
 
       return {
         code: item.code,
@@ -866,6 +1074,8 @@ class StockDatabase {
         totalSold: item.totalSold,
         ads,
         avgStockoutRate,
+        currentlyEmptyCount,
+        isMustHave,
         maxDaysOutOfStock: worstOutlet ? worstOutlet.daysOutOfStock : 0,
         worstOutlet: worstOutlet ? worstOutlet.outlet : '-',
         outletDetails,
@@ -892,9 +1102,8 @@ class StockDatabase {
 
   /**
    * ABC classification (revenue Pareto: A ≈ top 80% cumulative, B ≈ next 15%,
-   * C ≈ last 5%) crossed with stock aging (days since last sale) for every
-   * item that currently has stock on hand — surfaces both "important item
-   * running low" and "dead stock tying up capital" in one report.
+   * C ≈ last 5%) crossed with stock aging (days since last sale or last purchase)
+   * and real HPP / unit cost valuation for every item that currently has stock on hand.
    *
    * @param {number} [days=90] - Sales window used to rank items for ABC classification
    */
@@ -930,12 +1139,24 @@ class StockDatabase {
     }
 
     const lastSaleRows = this.db.prepare(`
-      SELECT item_code, MAX(transaction_date) as last_sale_date, AVG(sell_price) as avg_sell_price
+      SELECT item_code,
+             MAX(transaction_date) as last_sale_date,
+             AVG(CASE WHEN sell_price > 0 THEN sell_price ELSE NULL END) as avg_sell_price,
+             AVG(CASE WHEN cogs > 0 THEN cogs ELSE NULL END) as avg_cogs
       FROM sales_records
       GROUP BY item_code
     `).all();
     const lastSaleMap = {};
     lastSaleRows.forEach(r => { lastSaleMap[r.item_code] = r; });
+
+    const purchaseInfoMap = {};
+    this.db.prepare(`
+      SELECT item_code,
+             MAX(purchase_date) as last_purchase_date,
+             AVG(CASE WHEN unit_price > 0 THEN unit_price ELSE NULL END) as avg_unit_cost
+      FROM purchase_records
+      GROUP BY item_code
+    `).all().forEach(r => { purchaseInfoMap[r.item_code] = r; });
 
     const revenueMap = {};
     let totalRevenue = 0;
@@ -968,8 +1189,17 @@ class StockDatabase {
       return Math.round((d1 - d2) / 86400000);
     }
 
-    function agingBucketFor(agingDays, neverSold) {
-      if (neverSold) return 'NEVER_SOLD';
+    function agingBucketFor(agingDays, neverSold, purchaseAgeDays) {
+      // Jika belum pernah terjual TAPI baru dibeli dalam <= deadStockDaysSetting hari,
+      // gunakan umur sejak tanggal pembelian agar barang baru masuk tidak divonis NEVER_SOLD/Dead Stock
+      if (neverSold) {
+        if (purchaseAgeDays !== null && purchaseAgeDays <= deadStockDaysSetting) {
+          if (purchaseAgeDays <= threshold1) return 'FRESH';
+          if (purchaseAgeDays <= threshold2) return 'SLOW_7_14';
+          return 'AGING_15_30';
+        }
+        return 'NEVER_SOLD';
+      }
       if (agingDays <= threshold1) return 'FRESH';
       if (agingDays <= threshold2) return 'SLOW_7_14';
       if (agingDays <= deadStockDaysSetting) return 'AGING_15_30';
@@ -978,9 +1208,19 @@ class StockDatabase {
 
     const items = currentStockRows.map(r => {
       const saleInfo = lastSaleMap[r.item_code];
+      const purchInfo = purchaseInfoMap[r.item_code];
       const neverSold = !saleInfo || !saleInfo.last_sale_date;
-      const agingDays = neverSold ? null : daysBetween(latestStockDate, saleInfo.last_sale_date);
+      const agingDays = neverSold ? null : Math.max(0, daysBetween(latestStockDate, saleInfo.last_sale_date));
+      const purchaseAgeDays = (purchInfo && purchInfo.last_purchase_date)
+        ? Math.max(0, daysBetween(latestStockDate, purchInfo.last_purchase_date))
+        : null;
+
+      // Valuasi HPP riil: prioritaskan Harga Beli (purchase_records) -> HPP (sales_records.cogs) -> Harga Jual
       const avgSellPrice = saleInfo && saleInfo.avg_sell_price ? saleInfo.avg_sell_price : 0;
+      const unitCost = (purchInfo && purchInfo.avg_unit_cost)
+        || (saleInfo && saleInfo.avg_cogs)
+        || avgSellPrice;
+
       const revenueInWindow = (revenueMap[r.item_code] || {}).revenue || 0;
       const qtyInWindow = (revenueMap[r.item_code] || {}).qty || 0;
 
@@ -994,10 +1234,12 @@ class StockDatabase {
         revenueInWindow: Math.round(revenueInWindow),
         qtyInWindow,
         lastSaleDate: neverSold ? null : saleInfo.last_sale_date,
+        lastPurchaseDate: purchInfo ? purchInfo.last_purchase_date : null,
         neverSold,
-        agingDays: neverSold ? null : Math.max(0, agingDays),
-        agingBucket: agingBucketFor(agingDays, neverSold),
-        estimatedValue: Math.round(r.total_stock * avgSellPrice)
+        agingDays: neverSold ? purchaseAgeDays : agingDays,
+        agingBucket: agingBucketFor(agingDays, neverSold, purchaseAgeDays),
+        unitCost: Math.round(unitCost || 0),
+        estimatedValue: Math.round(r.total_stock * (unitCost || 0))
       };
     });
 
@@ -1018,8 +1260,6 @@ class StockDatabase {
    *
    * @param {number} [days=30]
    * @param {string} [itemGroup] - Optional category filter (e.g. "VOUCHER", "PETSHOP").
-   *   Only applies to the sales-side numbers — stock and stockout rate aren't
-   *   category-aware since that field only exists on sales_records.
    */
   getOutletPerformance(days = 30, itemGroup = null) {
     const salesDates = this.db.prepare(`
@@ -1035,7 +1275,7 @@ class StockDatabase {
         SELECT outlet, SUM(subtotal) as revenue, SUM(profit_loss) as profit, SUM(qty) as qty,
                COUNT(DISTINCT transaction_no) as tx_count
         FROM sales_records
-        WHERE transaction_date IN (${placeholders}) ${groupClause}
+        WHERE transaction_date IN (${placeholders}) AND outlet != 'GDG' ${groupClause}
         GROUP BY outlet
       `).all(...params);
     }
@@ -1046,14 +1286,11 @@ class StockDatabase {
       stockRows = this.db.prepare(`
         SELECT outlet, SUM(stock) as total_stock, COUNT(DISTINCT item_code) as item_count
         FROM stock_records
-        WHERE report_date = ?
+        WHERE report_date = ? AND outlet != 'GDG'
         GROUP BY outlet
       `).all(latest.report_date);
     }
 
-    // Stockout rate per outlet: reuses the same "no stock_records row on a
-    // report date = 0 stock that day" assumption as getStockoutHistory, but
-    // aggregated by outlet instead of by item.
     const reportDates = this.db.prepare(`
       SELECT report_date FROM reports ORDER BY report_date DESC LIMIT ?
     `).all(days).map(r => r.report_date);
@@ -1061,10 +1298,18 @@ class StockDatabase {
     if (reportDates.length > 0) {
       const placeholders = reportDates.map(() => '?').join(',');
       stockoutRows = this.db.prepare(`
-        SELECT report_date, outlet, item_code FROM stock_records WHERE report_date IN (${placeholders})
+        SELECT report_date, outlet, item_code FROM stock_records WHERE report_date IN (${placeholders}) AND outlet != 'GDG'
       `).all(...reportDates);
     }
+    const historicalOutletItems = this.db.prepare(`
+      SELECT DISTINCT outlet, item_code FROM sales_records WHERE outlet != 'GDG'
+    `).all();
+
     const outletItemDays = {}; // outlet -> item_code -> Set(reportDatesInStock)
+    historicalOutletItems.forEach(r => {
+      if (!outletItemDays[r.outlet]) outletItemDays[r.outlet] = {};
+      if (!outletItemDays[r.outlet][r.item_code]) outletItemDays[r.outlet][r.item_code] = new Set();
+    });
     stockoutRows.forEach(r => {
       if (!outletItemDays[r.outlet]) outletItemDays[r.outlet] = {};
       if (!outletItemDays[r.outlet][r.item_code]) outletItemDays[r.outlet][r.item_code] = new Set();

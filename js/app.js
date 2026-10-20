@@ -1583,7 +1583,7 @@ document.addEventListener('DOMContentLoaded', () => {
       tableBody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);"><i data-lucide="loader-2" class="spin"></i> Memuat rekomendasi transfer antar-cabang...</td></tr>`;
       if (window.lucide) lucide.createIcons();
 
-      const days = document.getElementById('rebalance-days-filter')?.value || '1';
+      const days = document.getElementById('rebalance-days-filter')?.value || '7';
       const url = `/api/analytics/rebalancing?stockDate=${encodeURIComponent(appState.currentDate || '')}&days=${encodeURIComponent(days)}`;
       const res = await fetch(url);
       const json = await res.json();
@@ -1675,12 +1675,15 @@ document.addEventListener('DOMContentLoaded', () => {
       const urgencyBadge = r.urgency === 'HIGH'
         ? `<span class="status-badge badge-high-urgency">🔴 MENDESAK</span>`
         : `<span class="status-badge badge-med-urgency">🟡 WASPADA</span>`;
+      const mustHaveBadge = r.isMustHave
+        ? ` <span class="status-badge" style="background: rgba(239, 68, 68, 0.16); color: #f87171; font-size: 9.5px; padding: 1px 5px;">🔥 WAJIB ADA</span>`
+        : '';
 
       rowsHtml += `
         <tr>
           <td style="text-align: center; color: var(--text-muted);">${idx + 1}</td>
           <td>
-            <div style="font-weight: 700; color: var(--text-primary);">${escapeHtml(r.itemName)}</div>
+            <div style="font-weight: 700; color: var(--text-primary);">${escapeHtml(r.itemName)}${mustHaveBadge}</div>
             <div style="font-size: 11px; color: var(--text-secondary); font-family: monospace;">${r.itemCode}</div>
           </td>
           <td>
@@ -1759,7 +1762,7 @@ document.addEventListener('DOMContentLoaded', () => {
       tableBody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);"><i data-lucide="loader-2" class="spin"></i> Memuat analisa ketahanan stok...</td></tr>`;
       if (window.lucide) lucide.createIcons();
 
-      const days = document.getElementById('coverage-days-filter')?.value || '1';
+      const days = document.getElementById('coverage-days-filter')?.value || '7';
       const url = `/api/analytics/integrated?stockDate=${encodeURIComponent(appState.currentDate || '')}&days=${encodeURIComponent(days)}`;
       const res = await fetch(url);
       const json = await res.json();
@@ -1786,7 +1789,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (query && !item.name.toLowerCase().includes(query) && !item.code.includes(query)) return false;
       if (categoryFilter !== 'ALL' && item.itemGroup !== categoryFilter) return false;
 
-      if (statusFilter !== 'ALL') {
+      if (statusFilter === 'MUST_HAVE') {
+        if (!item.isMustHave) return false;
+      } else if (statusFilter !== 'ALL') {
         const hasMatchingOutlet = Object.values(item.outlets).some(o => o.status === statusFilter);
         if (!hasMatchingOutlet) return false;
       }
@@ -1806,14 +1811,19 @@ document.addEventListener('DOMContentLoaded', () => {
   // Extracted from renderCoverageTable so the virtual scroller can call it
   // per-visible-row instead of building HTML for the entire filtered list.
   function buildCoverageRowHtml(item, idx) {
+    const emptyOutlets = [];
     const criticalOutlets = [];
     const overstockOutlets = [];
 
     Object.entries(item.outlets).forEach(([outlet, out]) => {
+      if (outlet === 'GDG') return;
       if (out.status === 'OUT_OF_STOCK') {
-        criticalOutlets.push(`<span class="status-badge badge-critical">${escapeHtml(outlet)}: KOSONG (${out.ads}/hr)</span>`);
+        const label = out.isMustHaveStockout && out.ads === 0
+          ? `${escapeHtml(outlet)}: WAJIB ADA (0 pcs)`
+          : `${escapeHtml(outlet)}: 0 pcs (${out.ads}/hr)`;
+        emptyOutlets.push(`<span class="status-badge badge-critical">${label}</span>`);
       } else if (out.status === 'CRITICAL') {
-        criticalOutlets.push(`<span class="status-badge badge-critical">${escapeHtml(outlet)}: ${out.doc} hr</span>`);
+        criticalOutlets.push(`<span class="status-badge badge-med-urgency">${escapeHtml(outlet)}: ${out.stock} pcs (${out.doc >= 999 ? 'Min' : out.doc + ' hr'})</span>`);
       } else if (out.status === 'OVERSTOCK') {
         overstockOutlets.push(`<span class="status-badge badge-overstock">${escapeHtml(outlet)}: ${out.doc} hr (${out.stock} pcs)</span>`);
       }
@@ -1824,8 +1834,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // assumes a fixed row height (ANALYTICS_VT_ROW_HEIGHT).
     const lineStyle = 'white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
     let outletDetails = '';
-    if (criticalOutlets.length > 0) {
-      outletDetails += `<div style="margin-bottom: 4px; ${lineStyle}"><strong>Kritis:</strong> ${criticalOutlets.slice(0, 4).join(' ')} ${criticalOutlets.length > 4 ? `+${criticalOutlets.length - 4}` : ''}</div>`;
+    const urgentBadges = [...emptyOutlets, ...criticalOutlets];
+    if (urgentBadges.length > 0) {
+      const labelPrefix = emptyOutlets.length > 0 ? `Kosong (${emptyOutlets.length}):` : 'Kritis:';
+      outletDetails += `<div style="margin-bottom: 4px; ${lineStyle}"><strong>${labelPrefix}</strong> ${urgentBadges.slice(0, 4).join(' ')} ${urgentBadges.length > 4 ? `+${urgentBadges.length - 4}` : ''}</div>`;
     }
     if (overstockOutlets.length > 0) {
       outletDetails += `<div style="${lineStyle}"><strong>Overstock:</strong> ${overstockOutlets.slice(0, 4).join(' ')} ${overstockOutlets.length > 4 ? `+${overstockOutlets.length - 4}` : ''}</div>`;
@@ -1833,12 +1845,15 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!outletDetails) outletDetails = '<span style="color: var(--text-muted); font-size: 11px;">Kondisi Normal / Seimbang</span>';
 
     const docDisplay = item.globalDoC >= 999 ? '∞' : `${item.globalDoC} hr`;
+    const mustHaveBadge = item.isMustHave
+      ? ` <span class="status-badge" style="background: rgba(239, 68, 68, 0.16); color: #f87171; font-size: 9.5px; padding: 1px 5px;">🔥 WAJIB ADA</span>`
+      : '';
 
     return `
       <tr>
         <td style="text-align: center; color: var(--text-muted);">${idx + 1}</td>
         <td style="font-family: monospace; font-size: 12px;">${escapeHtml(item.code)}</td>
-        <td style="font-weight: 700;">${escapeHtml(item.name)}</td>
+        <td style="font-weight: 700;">${escapeHtml(item.name)}${mustHaveBadge}</td>
         <td>
           <div style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(item.merk || '-')}</div>
           <div style="font-size: 10px; color: var(--text-muted);">${escapeHtml(item.itemGroup || '-')}</div>
@@ -1908,7 +1923,7 @@ document.addEventListener('DOMContentLoaded', () => {
       tableBody.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 40px; color: var(--text-muted);"><i data-lucide="loader-2" class="spin"></i> Memuat rekomendasi PO belanja...</td></tr>`;
       if (window.lucide) lucide.createIcons();
 
-      const days = document.getElementById('po-days-filter')?.value || '1';
+      const days = document.getElementById('po-days-filter')?.value || '7';
       const url = `/api/analytics/po?stockDate=${encodeURIComponent(appState.currentDate || '')}&days=${encodeURIComponent(days)}`;
       const res = await fetch(url);
       const json = await res.json();
@@ -1983,12 +1998,21 @@ document.addEventListener('DOMContentLoaded', () => {
       const urgencyBadge = s.urgency === 'HIGH'
         ? `<span class="status-badge badge-high-urgency">🔴 MENDESAK</span>`
         : `<span class="status-badge badge-med-urgency">🟡 NORMAL</span>`;
+      const mustHaveBadge = s.isMustHave
+        ? ` <span class="status-badge" style="background: rgba(239, 68, 68, 0.16); color: #f87171; font-size: 9.5px; padding: 1px 5px;">🔥 WAJIB ADA</span>`
+        : '';
+      const emptyInfo = s.emptyBranchesCount > 0
+        ? `<div style="font-size: 10px; color: var(--status-danger); margin-top: 2px;">${s.emptyBranchesCount} cabang kosong (GDG: ${s.gdgStock || 0})</div>`
+        : '';
 
       rowsHtml += `
         <tr>
           <td style="text-align: center; color: var(--text-muted);">${idx + 1}</td>
           <td style="font-family: monospace; font-size: 12px;">${escapeHtml(s.itemCode)}</td>
-          <td style="font-weight: 700;">${escapeHtml(s.itemName)}</td>
+          <td>
+            <div style="font-weight: 700;">${escapeHtml(s.itemName)}${mustHaveBadge}</div>
+            ${emptyInfo}
+          </td>
           <td>
             <div style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(s.merk || '-')}</div>
             <div style="font-size: 10px; color: var(--text-muted);">${escapeHtml(s.itemGroup || '-')}</div>
@@ -2175,11 +2199,15 @@ document.addEventListener('DOMContentLoaded', () => {
     if (problemOutlets.length > 4) outletBadges += ` <span style="color: var(--text-muted); font-size: 11px;">+${problemOutlets.length - 4}</span>`;
     if (!outletBadges) outletBadges = '<span style="color: var(--text-muted); font-size: 11px;">Tidak pernah kosong</span>';
 
+    const mustHaveBadge = item.isMustHave
+      ? ` <span class="status-badge" style="background: rgba(239, 68, 68, 0.16); color: #f87171; font-size: 9.5px; padding: 1px 5px;">🔥 WAJIB ADA</span>`
+      : '';
+
     return `
       <tr>
         <td style="text-align: center; color: var(--text-muted);">${idx + 1}</td>
         <td style="font-family: monospace; font-size: 12px;">${escapeHtml(item.code)}</td>
-        <td style="font-weight: 700;">${escapeHtml(item.name)}</td>
+        <td style="font-weight: 700;">${escapeHtml(item.name)}${mustHaveBadge}</td>
         <td>
           <div style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(item.merk || '-')}</div>
           <div style="font-size: 10px; color: var(--text-muted);">${escapeHtml(item.itemGroup || '-')}</div>
@@ -2330,11 +2358,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const classColor = item.abcClass === 'A' ? 'var(--status-success)' : item.abcClass === 'B' ? 'var(--status-warning)' : item.abcClass === 'C' ? 'var(--text-secondary)' : 'var(--text-muted)';
     const agingCell = `${AGING_BUCKET_BADGES[item.agingBucket] || ''}${!item.neverSold ? `<div style="margin-top: 3px; color: var(--text-secondary); font-size: 11px;">${item.agingDays} hari</div>` : ''}`;
 
+    const mustHaveBadge = item.isMustHave
+      ? ` <span class="status-badge" style="background: rgba(239, 68, 68, 0.16); color: #f87171; font-size: 9.5px; padding: 1px 5px;">🔥 WAJIB ADA</span>`
+      : '';
+
     return `
       <tr>
         <td style="text-align: center; color: var(--text-muted);">${idx + 1}</td>
         <td style="font-family: monospace; font-size: 12px;">${escapeHtml(item.code)}</td>
-        <td style="font-weight: 700;">${escapeHtml(item.name)}</td>
+        <td style="font-weight: 700;">${escapeHtml(item.name)}${mustHaveBadge}</td>
         <td>
           <div style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(item.merk || '-')}</div>
           <div style="font-size: 10px; color: var(--text-muted);">${escapeHtml(item.itemGroup || '-')}</div>

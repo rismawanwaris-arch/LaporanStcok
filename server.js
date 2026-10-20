@@ -570,7 +570,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && pathname === '/api/analytics/integrated') {
     try {
       const stockDate = parsedUrl.searchParams.get('stockDate') || undefined;
-      const days = parseInt(parsedUrl.searchParams.get('days') || '1', 10);
+      const days = parseInt(parsedUrl.searchParams.get('days') || '7', 10);
       const data = db.getIntegratedData(stockDate, days);
       return sendJson(req, res, 200, { success: true, data });
     } catch (err) {
@@ -581,8 +581,8 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && pathname === '/api/analytics/rebalancing') {
     try {
       const stockDate = parsedUrl.searchParams.get('stockDate') || undefined;
-      const days = parseInt(parsedUrl.searchParams.get('days') || '1', 10);
-      const targetDays = parseInt(parsedUrl.searchParams.get('targetDays') || '7', 10);
+      const days = parseInt(parsedUrl.searchParams.get('days') || '7', 10);
+      const targetDays = parseInt(parsedUrl.searchParams.get('targetDays') || '4', 10);
       const integrated = db.getIntegratedData(stockDate, days);
       const recommendations = InventoryRebalancer.generateTransferRecommendations(integrated, { targetDays });
       return sendJson(req, res, 200, {
@@ -601,8 +601,8 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && pathname === '/api/analytics/po') {
     try {
       const stockDate = parsedUrl.searchParams.get('stockDate') || undefined;
-      const days = parseInt(parsedUrl.searchParams.get('days') || '1', 10);
-      const targetDays = parseInt(parsedUrl.searchParams.get('targetDays') || '14', 10);
+      const days = parseInt(parsedUrl.searchParams.get('days') || '7', 10);
+      const targetDays = parseInt(parsedUrl.searchParams.get('targetDays') || '7', 10);
       const integrated = db.getIntegratedData(stockDate, days);
       const poSuggestions = InventoryRebalancer.generatePOSuggestions(integrated, { targetDays });
       return sendJson(req, res, 200, {
@@ -621,7 +621,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && pathname === '/api/analytics/fsn') {
     try {
       const stockDate = parsedUrl.searchParams.get('stockDate') || undefined;
-      const days = parseInt(parsedUrl.searchParams.get('days') || '1', 10);
+      const days = parseInt(parsedUrl.searchParams.get('days') || '7', 10);
       const integrated = db.getIntegratedData(stockDate, days);
       const fsn = InventoryRebalancer.classifyFSN(integrated);
       return sendJson(req, res, 200, { success: true, fsn });
