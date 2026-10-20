@@ -1245,16 +1245,29 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
 
-    // Settings Handler (Dead Stock Days Configuration)
+    // Settings Handler (Dead Stock Days & Sender Protection Configuration)
     const btnSaveSettings = document.getElementById('btn-save-settings');
     const inputDeadStockDays = document.getElementById('input-setting-deadstock-days');
+    const inputMinKeepPcs = document.getElementById('input-setting-min-keep-pcs');
+    const inputMaxTransferPct = document.getElementById('input-setting-max-transfer-pct');
     const settingsFeedback = document.getElementById('settings-save-feedback');
 
     if (btnSaveSettings && inputDeadStockDays) {
       btnSaveSettings.addEventListener('click', async () => {
         const deadDays = parseInt(inputDeadStockDays.value, 10);
+        const minKeepPcs = inputMinKeepPcs ? parseInt(inputMinKeepPcs.value, 10) : 5;
+        const maxTransferPct = inputMaxTransferPct ? parseInt(inputMaxTransferPct.value, 10) : 50;
+
         if (isNaN(deadDays) || deadDays < 1 || deadDays > 365) {
           alert('Harap masukkan angka batas hari antara 1 sampai 365.');
+          return;
+        }
+        if (isNaN(minKeepPcs) || minKeepPcs < 1 || minKeepPcs > 100) {
+          alert('Stok minimal wajib tinggal di cabang asal harus antara 1 sampai 100 PCS.');
+          return;
+        }
+        if (isNaN(maxTransferPct) || maxTransferPct < 10 || maxTransferPct > 90) {
+          alert('Maksimal persentase stok cabang yang boleh ditarik harus antara 10% sampai 90%.');
           return;
         }
 
@@ -1266,19 +1279,24 @@ document.addEventListener('DOMContentLoaded', () => {
           const res = await fetch('/api/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ deadStockDays: deadDays })
+            body: JSON.stringify({
+              deadStockDays: deadDays,
+              minSenderKeepPcs: minKeepPcs,
+              maxTransferPct
+            })
           });
           const json = await res.json();
           if (res.ok && json.success) {
             if (settingsFeedback) {
               settingsFeedback.style.display = 'block';
               settingsFeedback.style.color = 'var(--status-success)';
-              settingsFeedback.textContent = `✓ Pengaturan berhasil disimpan: Barang tidak terjual ≥ ${deadDays} hari dianggap Dead Stock.`;
-              setTimeout(() => { settingsFeedback.style.display = 'none'; }, 4000);
+              settingsFeedback.textContent = `✓ Tersimpan: Dead Stock ≥ ${deadDays} hr · Sisa minimal cabang asal ≥ ${minKeepPcs} PCS · Maks penarikan ${maxTransferPct}%.`;
+              setTimeout(() => { settingsFeedback.style.display = 'none'; }, 5000);
             }
             // Muat ulang tab analitik aktif jika ada
             if (typeof loadABCAgingData === 'function') loadABCAgingData();
             if (typeof loadRebalanceData === 'function') loadRebalanceData();
+            if (typeof loadPOData === 'function') loadPOData();
           } else {
             alert(json.message || 'Gagal menyimpan pengaturan.');
           }
@@ -1339,8 +1357,16 @@ document.addEventListener('DOMContentLoaded', () => {
         const json = await res.json();
         if (json.success && json.settings) {
           const inputDays = document.getElementById('input-setting-deadstock-days');
-          if (inputDays && json.settings.deadStockDays) {
+          const inputMinKeep = document.getElementById('input-setting-min-keep-pcs');
+          const inputMaxPct = document.getElementById('input-setting-max-transfer-pct');
+          if (inputDays && json.settings.deadStockDays !== undefined) {
             inputDays.value = json.settings.deadStockDays;
+          }
+          if (inputMinKeep && json.settings.minSenderKeepPcs !== undefined) {
+            inputMinKeep.value = json.settings.minSenderKeepPcs;
+          }
+          if (inputMaxPct && json.settings.maxTransferPct !== undefined) {
+            inputMaxPct.value = json.settings.maxTransferPct;
           }
         }
       }
@@ -1679,6 +1705,9 @@ document.addEventListener('DOMContentLoaded', () => {
         ? ` <span class="status-badge" style="background: rgba(239, 68, 68, 0.16); color: #f87171; font-size: 9.5px; padding: 1px 5px;">🔥 WAJIB ADA</span>`
         : '';
 
+      const senderRemain = r.senderRemainingStock !== undefined ? r.senderRemainingStock : Math.max(0, (r.senderStock || 0) - r.qty);
+      const receiverAfter = (r.receiverStock || 0) + r.qty;
+
       rowsHtml += `
         <tr>
           <td style="text-align: center; color: var(--text-muted);">${idx + 1}</td>
@@ -1690,8 +1719,18 @@ document.addEventListener('DOMContentLoaded', () => {
             <div style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(r.merk || '-')}</div>
             <div style="font-size: 10px; color: var(--text-muted);">${escapeHtml(r.itemGroup || '-')}</div>
           </td>
-          <td><span class="transfer-from-tag">${escapeHtml(r.fromOutlet)}</span></td>
-          <td><span class="transfer-to-tag">${escapeHtml(r.toOutlet)}</span></td>
+          <td>
+            <span class="transfer-from-tag">${escapeHtml(r.fromOutlet)}</span>
+            <div style="font-size: 10.5px; color: var(--text-secondary); margin-top: 3px;">
+              Stok ${r.senderStock || 0} ➔ <strong style="color: var(--status-success);">Sisa ${senderRemain} PCS</strong>
+            </div>
+          </td>
+          <td>
+            <span class="transfer-to-tag">${escapeHtml(r.toOutlet)}</span>
+            <div style="font-size: 10.5px; color: var(--text-secondary); margin-top: 3px;">
+              Stok ${r.receiverStock || 0} ➔ <strong style="color: var(--accent-cyan);">Jadi ${receiverAfter} PCS</strong>
+            </div>
+          </td>
           <td style="text-align: right; font-weight: 800; color: var(--accent-cyan); font-size: 14px;">${r.qty} <span style="font-size: 11px; font-weight: 500;">PCS</span></td>
           <td style="text-align: center;">${urgencyBadge}</td>
           <td style="font-size: 11.5px; color: var(--text-secondary);">${escapeHtml(r.reason)}</td>
@@ -1734,7 +1773,10 @@ document.addEventListener('DOMContentLoaded', () => {
           'Merk': r.merk,
           'Kategori': r.itemGroup,
           'Dari Cabang (Sumber)': r.fromOutlet,
+          'Stok Awal Cabang Sumber (PCS)': r.senderStock || 0,
+          'Sisa Stok Cabang Sumber (PCS)': r.senderRemainingStock !== undefined ? r.senderRemainingStock : Math.max(0, (r.senderStock || 0) - r.qty),
           'Ke Cabang (Tujuan)': r.toOutlet,
+          'Stok Awal Cabang Tujuan (PCS)': r.receiverStock || 0,
           'Qty Transfer (PCS)': r.qty,
           'Tingkat Urgensi': r.urgency === 'HIGH' ? 'Mendesak' : 'Waspada',
           'Alasan Rekomendasi': r.reason

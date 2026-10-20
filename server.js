@@ -295,6 +295,20 @@ const server = http.createServer((req, res) => {
           }
           db.setSetting('deadStockDays', val);
         }
+        if (payload.minSenderKeepPcs !== undefined) {
+          const val = parseInt(payload.minSenderKeepPcs, 10);
+          if (isNaN(val) || val < 1 || val > 100) {
+            return sendJson(req, res, 400, { success: false, message: 'Stok minimal cabang pengirim harus antara 1 sampai 100 PCS.' });
+          }
+          db.setSetting('minSenderKeepPcs', val);
+        }
+        if (payload.maxTransferPct !== undefined) {
+          const val = parseInt(payload.maxTransferPct, 10);
+          if (isNaN(val) || val < 10 || val > 90) {
+            return sendJson(req, res, 400, { success: false, message: 'Maksimal persentase transfer harus antara 10% sampai 90%.' });
+          }
+          db.setSetting('maxTransferPct', val);
+        }
         const updated = db.getAllSettings();
         return sendJson(req, res, 200, { success: true, settings: updated, message: 'Pengaturan berhasil disimpan!' });
       } catch (err) {

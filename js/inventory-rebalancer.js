@@ -18,6 +18,13 @@ class InventoryRebalancer {
     const targetDays = options.targetDays || 4;      // Target coverage days for receiver (3-5 hari cukup untuk konter)
     const minOverstockDays = options.minOverstockDays || 10; // Min days to consider sender overstocked (> 10 hari sudah overstock)
 
+    // Proteksi Cabang Asal (dapat diatur dari menu Admin Database)
+    const settings = integratedData.settings || {};
+    const minSenderKeepPcs = Math.max(1, parseInt(options.minSenderKeepPcs ?? settings.minSenderKeepPcs ?? 5, 10) || 5);
+    const maxTransferPct = Math.min(90, Math.max(10, parseInt(options.maxTransferPct ?? settings.maxTransferPct ?? 50, 10) || 50));
+    const minKeepRatio = (100 - maxTransferPct) / 100; // Misal maxTransferPct = 50% -> wajib sisakan minimal 50% stok di cabang asal
+    const senderKeepDays = Math.max(options.senderKeepDays || 7, targetDays + 3); // Cabang pengirim aktif wajib aman minimal 7 hari
+
     const recommendations = [];
 
     Object.values(integratedData.items).forEach(item => {
@@ -25,11 +32,13 @@ class InventoryRebalancer {
       const senders = [];   // Branches or GDG that can send stock
 
       Object.entries(item.outlets).forEach(([outlet, out]) => {
-        // Gudang (GDG) can always supply if it has stock
+        // Gudang (GDG) can always supply 100% of its stock if it has stock
         if (outlet === 'GDG' && out.stock > 0) {
           senders.push({
             outlet: 'GDG',
             stock: out.stock,
+            remainingStock: out.stock,
+            keepStock: 0,
             available: out.stock,
             isGudang: true,
             isDeadStock: false,
@@ -62,18 +71,30 @@ class InventoryRebalancer {
         }
 
         // Check if outlet is a sender (Verified Dead Stock, Overstocked, or High Idle Surplus)
-        if (outlet !== 'GDG') {
+        // ATURAN EMAS CABANG ASAL (NON-GDG):
+        // Cabang ritel TIDAK BOLEH dikuras habis! Setiap cabang pengirim wajib menyisakan:
+        // 1) Minimal `minKeepByPcs` (stok pajangan/etalase wajib, default 5 PCS), DAN
+        // 2) Minimal `minKeepByPct` (persentase stok wajib tinggal, default 50% dari stok awal), DAN
+        // 3) Minimal `minKeepByAds` (kebutuhan jualan cabang pengirim sendiri selama 7 hari).
+        if (outlet !== 'GDG' && out.stock > 0) {
+          const baseMinKeepPcs = item.isMustHave ? Math.max(minSenderKeepPcs, 5) : minSenderKeepPcs;
+          const minKeepByPct = Math.ceil(out.stock * minKeepRatio);
+          const minKeepByAds = out.ads > 0 ? Math.ceil(out.ads * senderKeepDays) : 0;
+
           // 1) Status DEAD_STOCK: Terbukti tidak laku >= deadStockDaysSetting dan bukan barang baru beli
-          if (out.stock > 0 && out.status === 'DEAD_STOCK' && out.stock >= 3) {
-            const minKeep = item.isMustHave ? 2 : Math.max(1, Math.floor(out.stock * 0.2));
-            const available = Math.max(0, out.stock - minKeep);
-            if (available >= 1) {
+          //    Tetap sisakan minimal stok pajangan (min 3 PCS atau minSenderKeepPcs) & minimal % stok wajib tinggal
+          if (out.status === 'DEAD_STOCK') {
+            const keepStock = Math.max(Math.min(baseMinKeepPcs, 3), minKeepByPct);
+            const available = Math.max(0, out.stock - keepStock);
+            if (available >= 2) {
               const daysUnsold = out.neverSold
                 ? `Belum pernah terjual di cabang ini`
                 : `Tidak terjual ${out.agingDays} hari`;
               senders.push({
                 outlet,
                 stock: out.stock,
+                remainingStock: out.stock,
+                keepStock,
                 available,
                 isGudang: false,
                 ads: 0,
@@ -84,15 +105,16 @@ class InventoryRebalancer {
               });
             }
           }
-          // 2) Overstocked active branch: keep safe buffer, release excess
+          // 2) Overstocked active branch: wajib sisakan 7 hari penjualan, minimal PCS pajangan, dan minimal % stok tinggal
           else if (out.ads > 0 && (out.doc >= minOverstockDays || out.stock > Math.ceil(out.ads * 12))) {
-            const minKeep = item.isMustHave ? 3 : 2;
-            const keepStock = Math.max(Math.ceil(out.ads * targetDays), minKeep);
-            const excess = out.stock - keepStock;
+            const keepStock = Math.max(baseMinKeepPcs, minKeepByPct, minKeepByAds);
+            const excess = Math.max(0, out.stock - keepStock);
             if (excess >= 2) {
               senders.push({
                 outlet,
                 stock: out.stock,
+                remainingStock: out.stock,
+                keepStock,
                 available: excess,
                 isGudang: false,
                 ads: out.ads,
@@ -102,18 +124,19 @@ class InventoryRebalancer {
               });
             }
           }
-          // 3) High Idle Surplus: belum melewati batas hari Dead Stock, tapi menumpuk >= 6 PCS tanpa penjualan
+          // 3) High Idle Surplus: belum melewati batas hari Dead Stock, tapi menumpuk tinggi tanpa penjualan
           //    Hanya boleh dipakai untuk menolong cabang yang sedang HIGH urgency (Stok 0 / Kritis),
-          //    dan wajib menyisakan minimal 3-4 PCS di cabang pengirim agar tidak kehabisan pajangan!
-          else if (out.status === 'IDLE' && !out.isNewStock && out.stock >= 6) {
-            const keepDisplay = Math.max(item.isMustHave ? 4 : 3, Math.ceil(out.stock * 0.5));
-            const surplus = out.stock - keepDisplay;
+          //    dan wajib menyisakan minimal stok pajangan + minimal % stok di cabang pengirim.
+          else if (out.status === 'IDLE' && !out.isNewStock) {
+            const keepStock = Math.max(baseMinKeepPcs, minKeepByPct);
+            const surplus = Math.max(0, out.stock - keepStock);
             if (surplus >= 2) {
               senders.push({
                 outlet,
                 stock: out.stock,
+                remainingStock: out.stock,
+                keepStock,
                 available: surplus,
-                keepDisplay,
                 isGudang: false,
                 ads: 0,
                 doc: Infinity,
@@ -152,10 +175,14 @@ class InventoryRebalancer {
           // Idle surplus senders only rescue HIGH urgency receivers (0 stock / critical)
           if (sender.isIdleSurplus && receiver.urgency !== 'HIGH') continue;
 
-          const transferQty = Math.min(remainingNeed, sender.available);
+          // Jika pengirim adalah sesama cabang ritel (bukan GDG), batasi jumlah per rute transfer
+          // maksimal 12 PCS (atau kebutuhan darurat 2-3 hari), agar 1 cabang ritel tidak terkuras oleh 1 cabang besar
+          const peerCap = sender.isGudang ? remainingNeed : Math.min(remainingNeed, Math.max(6, Math.ceil(receiver.ads * 2.5), 12));
+          const transferQty = Math.min(peerCap, sender.available);
           if (transferQty <= 0) continue;
 
           sender.available -= transferQty;
+          sender.remainingStock -= transferQty;
           remainingNeed -= transferQty;
 
           const receiverNote = item.isMustHave && receiver.stock === 0
@@ -164,13 +191,13 @@ class InventoryRebalancer {
 
           let reason = '';
           if (sender.isGudang) {
-            reason = `Distribusi dari Gudang ke ${receiver.outlet} (Sisa GDG: ${sender.stock - transferQty} PCS)${receiverNote}`;
+            reason = `Distribusi Gudang ke ${receiver.outlet} (Stok GDG: ${sender.stock} ➔ Sisa ${sender.remainingStock} PCS)${receiverNote}`;
           } else if (sender.isDeadStock) {
-            reason = `Mengalihkan dead stock dari ${sender.outlet} (${sender.deadStockReason}, stok ${sender.stock} PCS)${receiverNote}`;
+            reason = `Relokasi sebagian dead stock ${sender.outlet} (${sender.deadStockReason} · Stok ${sender.stock} ➔ Disisakan ${sender.remainingStock} PCS)${receiverNote}`;
           } else if (sender.isIdleSurplus) {
-            reason = `Pemerataan stok pasif dari ${sender.outlet} (Stok ${sender.stock} PCS belum bergerak, disisakan ${sender.stock - transferQty} PCS di cabang)${receiverNote}`;
+            reason = `Pemerataan stok pasif dari ${sender.outlet} (Stok awal ${sender.stock} ➔ Disisakan ${sender.remainingStock} PCS di cabang asal)${receiverNote}`;
           } else {
-            reason = `Penyeimbangan overstock: ${sender.outlet} (DoC ${sender.doc} hr) ke ${receiver.outlet} (DoC ${receiver.doc} hr)${receiverNote}`;
+            reason = `Penyeimbangan overstock ${sender.outlet} (DoC ${sender.doc} hr · Stok ${sender.stock} ➔ Disisakan ${sender.remainingStock} PCS)${receiverNote}`;
           }
 
           recommendations.push({
@@ -187,6 +214,8 @@ class InventoryRebalancer {
             receiverADS: receiver.ads,
             receiverDoc: receiver.doc,
             senderStock: sender.stock,
+            senderRemainingStock: sender.remainingStock,
+            senderKeepFloor: sender.keepStock,
             senderADS: sender.ads,
             reason
           });
@@ -236,17 +265,26 @@ class InventoryRebalancer {
       let criticalBranchDeficit = 0;
       let transferableSupply = gdgStock;
       let emptyBranchesCount = 0;
+      const settings = integratedData.settings || {};
+      const minSenderKeepPcs = Math.max(1, parseInt(settings.minSenderKeepPcs ?? 5, 10) || 5);
+      const maxTransferPct = Math.min(90, Math.max(10, parseInt(settings.maxTransferPct ?? 50, 10) || 50));
+      const minKeepRatio = (100 - maxTransferPct) / 100;
 
       Object.entries(item.outlets).forEach(([outlet, out]) => {
         if (outlet === 'GDG') return;
+        const baseMinKeep = item.isMustHave ? Math.max(minSenderKeepPcs, 5) : minSenderKeepPcs;
+        const minKeepByPct = Math.ceil((out.stock || 0) * minKeepRatio);
+
         if (out.status === 'OUT_OF_STOCK' || out.status === 'CRITICAL') {
           const minTarget = Math.max(Math.ceil(out.ads * 4), item.isMustHave ? 3 : 2);
           criticalBranchDeficit += Math.max(0, minTarget - out.stock);
           if (out.stock === 0) emptyBranchesCount += 1;
         } else if (out.status === 'DEAD_STOCK' && out.stock >= 3) {
-          transferableSupply += Math.floor(out.stock * 0.7);
+          const keep = Math.max(Math.min(baseMinKeep, 3), minKeepByPct);
+          transferableSupply += Math.max(0, out.stock - keep);
         } else if (out.status === 'OVERSTOCK' && out.ads > 0) {
-          transferableSupply += Math.max(0, out.stock - Math.ceil(out.ads * 4));
+          const keep = Math.max(baseMinKeep, minKeepByPct, Math.ceil(out.ads * 7));
+          transferableSupply += Math.max(0, out.stock - keep);
         }
       });
 

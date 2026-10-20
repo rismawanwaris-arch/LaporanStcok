@@ -917,7 +917,8 @@ class StockDatabase {
       allOutlets: Array.from(outletsSet),
       items: itemsMap,
       availableItemGroups: this.getDistinctItemGroups(),
-      deadStockDaysSetting
+      deadStockDaysSetting,
+      settings: this.getAllSettings()
     };
   }
 
@@ -1710,7 +1711,9 @@ class StockDatabase {
   getAllSettings() {
     const rows = this.db.prepare(`SELECT key, value FROM app_settings`).all();
     const map = {
-      deadStockDays: 30, // default konter pulsa: 30 hari
+      deadStockDays: 30,     // default konter pulsa: 30 hari
+      minSenderKeepPcs: 5,   // default stok pajangan minimal wajib tinggal di cabang asal: 5 PCS
+      maxTransferPct: 50     // default maksimal % stok cabang asal yang boleh ditarik: 50%
     };
     rows.forEach(r => {
       const num = parseInt(r.value, 10);
