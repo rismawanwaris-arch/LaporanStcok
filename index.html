@@ -6,7 +6,7 @@
   <title>Voucher Analytics & Smart Rebalancing - Bee Accounting</title>
   
   <!-- Font & Styling -->
-  <link rel="stylesheet" href="css/style.css?v=3.3">
+  <link rel="stylesheet" href="css/style.css?v=3.4">
   
   <!-- Lucide Icons, Chart.js, SortableJS: deferred so they download in
        parallel with HTML parsing instead of blocking it, while still
@@ -106,8 +106,12 @@
 
       <!-- Navigation Section: Data & Berkas -->
       <div class="sidebar-nav-group">
-        <div class="sidebar-group-title">DATA & DATABASE</div>
+        <div class="sidebar-group-title">DATA & PENGATURAN</div>
         <nav class="sidebar-menu">
+          <button id="btn-open-transfer-settings-sidebar" type="button" class="sidebar-nav-item" title="Atur Standar Pengiriman & Kategori Transfer">
+            <i data-lucide="sliders-horizontal" style="color: var(--accent-cyan);"></i>
+            <span class="nav-label">Standar Transfer</span>
+          </button>
           <button class="sidebar-nav-item tab-btn" data-tab="database" title="Kelola Database Riwayat">
             <i data-lucide="database"></i>
             <span class="nav-label">Kelola Database</span>
@@ -403,12 +407,25 @@
           </div>
         </div>
 
-        <div class="filter-group" style="margin-left: auto;">
+        <div class="filter-group" style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
+          <button id="btn-open-transfer-settings" type="button" class="btn btn-primary" title="Buka Sidebar Pengaturan Standar Transfer & Kategori">
+            <i data-lucide="sliders-horizontal"></i> Standar & Kategori
+          </button>
           <button id="btn-export-rebalance" class="btn btn-success">
             <i data-lucide="file-spreadsheet"></i> Ekspor Slip Transfer (XLSX)
           </button>
         </div>
       </section>
+
+      <!-- Active Transfer Standards Summary Pill Bar -->
+      <div id="rebalance-active-rules-bar" class="glass-panel" style="padding: 8px 14px; margin-bottom: 12px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; font-size: 11.5px; color: var(--text-secondary);">
+        <div id="rebalance-active-rules-summary" style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px;">
+          <span><i data-lucide="shield-check" style="width: 13px; height: 13px; display: inline; vertical-align: -2px; color: var(--status-success);"></i> <strong>Standar Aktif:</strong> Min Kirim <strong>3 PCS</strong> · Min Sisa Cabang Asal <strong>5 PCS</strong> · Maks Penarikan <strong>50%</strong></span>
+        </div>
+        <button id="btn-open-transfer-settings-inline" type="button" style="background: transparent; border: none; color: var(--accent-cyan); font-size: 11.5px; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px;">
+          <i data-lucide="settings-2" style="width: 13px; height: 13px;"></i> Ubah Standar Kategori
+        </button>
+      </div>
 
       <!-- Rebalancing Table -->
       <section class="table-section">
@@ -1511,13 +1528,115 @@
     </div>
   </div>
 
+  <!-- ============================================================ -->
+  <!-- RIGHT SIDEBAR DRAWER: PENGATURAN STANDAR TRANSFER & KATEGORI -->
+  <!-- ============================================================ -->
+  <div id="transfer-settings-backdrop" class="settings-drawer-backdrop" style="display: none;"></div>
+  <aside id="transfer-settings-drawer" class="settings-drawer" aria-hidden="true">
+    <div class="settings-drawer-header">
+      <div>
+        <div class="settings-drawer-title">
+          <i data-lucide="sliders-horizontal" style="width: 17px; height: 17px; color: var(--accent-cyan);"></i>
+          <span>Standar & Aturan Transfer Stok</span>
+        </div>
+        <p class="settings-drawer-subtitle">
+          Atur minimal pengiriman global, proteksi sisa stok cabang asal, serta urgensi & minimal kirim masing-masing kategori.
+        </p>
+      </div>
+      <button id="btn-close-transfer-settings" type="button" class="btn-icon-square" title="Tutup Sidebar Pengaturan">
+        <i data-lucide="x"></i>
+      </button>
+    </div>
+
+    <div class="settings-drawer-body">
+      <!-- 1. Standar Default Global -->
+      <div class="settings-section-block">
+        <div class="settings-section-heading">
+          <i data-lucide="globe" style="width: 14px; height: 14px; color: var(--accent-cyan);"></i>
+          <span>1. Standar Default Global</span>
+        </div>
+        <p class="settings-section-desc">
+          Standar acuan utama untuk semua cabang & kategori baru.
+        </p>
+
+        <div class="settings-grid-2">
+          <div class="settings-field">
+            <label for="drawer-min-transfer-qty">Minimal Qty Dikirim (PCS)</label>
+            <input type="number" id="drawer-min-transfer-qty" min="1" max="100" value="3" class="filter-input">
+            <span class="settings-field-hint">Contoh: <strong>3 PCS</strong> (Tidak sarankan kirim 1–2 pcs)</span>
+          </div>
+
+          <div class="settings-field">
+            <label for="drawer-min-keep-pcs">Minimal Sisa Cabang Asal (PCS)</label>
+            <input type="number" id="drawer-min-keep-pcs" min="1" max="100" value="5" class="filter-input">
+            <span class="settings-field-hint">Stok pajangan wajib tinggal di cabang asal</span>
+          </div>
+
+          <div class="settings-field">
+            <label for="drawer-max-transfer-pct">Maks % Stok Ditarik (%)</label>
+            <input type="number" id="drawer-max-transfer-pct" min="10" max="90" value="50" class="filter-input">
+            <span class="settings-field-hint">50% = minimal separuh stok tetap di cabang asal</span>
+          </div>
+
+          <div class="settings-field">
+            <label for="drawer-target-days">Target Stok Tujuan (Hari)</label>
+            <input type="number" id="drawer-target-days" min="1" max="30" value="4" class="filter-input">
+            <span class="settings-field-hint">Target hari ketahanan cabang penerima</span>
+          </div>
+
+          <div class="settings-field" style="grid-column: 1 / -1;">
+            <label for="drawer-deadstock-days">Batas Hari Dead Stock Tanpa Penjualan (Hari)</label>
+            <input type="number" id="drawer-deadstock-days" min="1" max="365" value="30" class="filter-input">
+            <span class="settings-field-hint">Barang tanpa penjualan &ge; hari ini resmi berstatus Dead Stock (Rekomendasi: 15–30 hari)</span>
+          </div>
+        </div>
+
+        <div style="margin-top: 10px; display: flex; justify-content: flex-end;">
+          <button id="btn-apply-global-to-categories" type="button" class="btn btn-secondary" style="padding: 5px 10px; font-size: 11px;">
+            <i data-lucide="copy-check" style="width: 12px; height: 12px;"></i> Samakan Angka Kategori dengan Global di Atas
+          </button>
+        </div>
+      </div>
+
+      <!-- 2. Standar & Urgensi Per Kategori -->
+      <div class="settings-section-block" style="margin-top: 16px;">
+        <div class="settings-section-heading" style="justify-content: space-between;">
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <i data-lucide="layers" style="width: 14px; height: 14px; color: var(--accent-purple);"></i>
+            <span>2. Standar & Urgensi Per Kategori</span>
+          </div>
+          <span style="font-size: 10.5px; color: var(--text-muted); font-weight: 500;">Kustomisasi per jenis barang</span>
+        </div>
+        <p class="settings-section-desc">
+          Setiap kategori memiliki urgensi berbeda. Anda dapat mengatur minimal kirim (PCS), minimal sisa di cabang asal, dan mode prioritas untuk masing-masing kategori:
+        </p>
+
+        <div id="drawer-category-rules-list" class="category-rules-list">
+          <!-- Populated dynamically by js/app.js -->
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-drawer-footer">
+      <div id="drawer-settings-feedback" style="display: none; width: 100%; font-size: 11.5px; margin-bottom: 8px;"></div>
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%;">
+        <button id="btn-reset-transfer-settings" type="button" class="btn btn-secondary" style="padding: 8px 12px; font-size: 12px;">
+          <i data-lucide="rotate-ccw" style="width: 13px; height: 13px;"></i> Reset Rekomendasi
+        </button>
+        <button id="btn-save-transfer-settings" type="button" class="btn btn-primary" style="padding: 8px 16px; font-size: 12.5px; flex: 1; justify-content: center;">
+          <i data-lucide="save" style="width: 14px; height: 14px;"></i> Simpan & Terapkan Standar
+        </button>
+      </div>
+    </div>
+  </aside>
+
   <!-- Load internal Javascript Modules (deferred: downloads overlap with
        HTML parsing/CDN scripts above, execution stays in this order) -->
-  <script defer src="data/stock-data.js?v=3.3"></script>
-  <script defer src="js/stock-analytics.js?v=3.3"></script>
-  <script defer src="js/outlet-sorter.js?v=3.3"></script>
-  <script defer src="js/inventory-rebalancer.js?v=3.3"></script>
-  <script defer src="js/app.js?v=3.3"></script>
+  <script defer src="data/stock-data.js?v=3.4"></script>
+  <script defer src="js/stock-analytics.js?v=3.4"></script>
+  <script defer src="js/outlet-sorter.js?v=3.4"></script>
+  <script defer src="js/inventory-rebalancer.js?v=3.4"></script>
+  <script defer src="js/app.js?v=3.4"></script>
 
   <!-- Auto-initialize lucide icons. Deferred scripts above only finish
        running right before DOMContentLoaded, so `lucide` isn't guaranteed to

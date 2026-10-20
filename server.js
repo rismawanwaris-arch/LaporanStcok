@@ -272,11 +272,12 @@ const server = http.createServer((req, res) => {
     return sendJson(req, res, 200, { success: true, siteName: process.env.SITE_NAME || 'Bee Accounting' });
   }
 
-  // Settings API: admin config for dead stock threshold, etc.
+  // Settings API: admin config for dead stock threshold, transfer standards, per-category rules, etc.
   if (req.method === 'GET' && pathname === '/api/settings') {
     try {
       const settings = db.getAllSettings();
-      return sendJson(req, res, 200, { success: true, settings });
+      const availableItemGroups = db.getDistinctItemGroups();
+      return sendJson(req, res, 200, { success: true, settings, availableItemGroups });
     } catch (err) {
       return sendJson(req, res, 500, { success: false, message: err.message });
     }
@@ -295,6 +296,13 @@ const server = http.createServer((req, res) => {
           }
           db.setSetting('deadStockDays', val);
         }
+        if (payload.minTransferQty !== undefined) {
+          const val = parseInt(payload.minTransferQty, 10);
+          if (isNaN(val) || val < 1 || val > 100) {
+            return sendJson(req, res, 400, { success: false, message: 'Minimal pengiriman per rute harus antara 1 sampai 100 PCS.' });
+          }
+          db.setSetting('minTransferQty', val);
+        }
         if (payload.minSenderKeepPcs !== undefined) {
           const val = parseInt(payload.minSenderKeepPcs, 10);
           if (isNaN(val) || val < 1 || val > 100) {
@@ -309,8 +317,34 @@ const server = http.createServer((req, res) => {
           }
           db.setSetting('maxTransferPct', val);
         }
+        if (payload.targetDays !== undefined) {
+          const val = parseInt(payload.targetDays, 10);
+          if (isNaN(val) || val < 1 || val > 30) {
+            return sendJson(req, res, 400, { success: false, message: 'Target hari stok tujuan harus antara 1 sampai 30 hari.' });
+          }
+          db.setSetting('targetDays', val);
+        }
+        if (payload.categoryTransferRules !== undefined && typeof payload.categoryTransferRules === 'object') {
+          const cleaned = {};
+          Object.entries(payload.categoryTransferRules).forEach(([cat, rule]) => {
+            if (!rule || typeof rule !== 'object') return;
+            const validModes = ['PRIORITAS_UTAMA', 'STANDAR', 'HANYA_KOSONG', 'NONAKTIF'];
+            cleaned[cat] = {
+              urgencyMode: validModes.includes(rule.urgencyMode) ? rule.urgencyMode : 'STANDAR',
+              minTransferQty: Math.min(100, Math.max(1, parseInt(rule.minTransferQty, 10) || 3)),
+              minSenderKeepPcs: Math.min(100, Math.max(1, parseInt(rule.minSenderKeepPcs, 10) || 4)),
+              targetDays: Math.min(30, Math.max(1, parseInt(rule.targetDays, 10) || 4))
+            };
+          });
+          db.setSetting('categoryTransferRules', JSON.stringify(cleaned));
+        }
         const updated = db.getAllSettings();
-        return sendJson(req, res, 200, { success: true, settings: updated, message: 'Pengaturan berhasil disimpan!' });
+        return sendJson(req, res, 200, {
+          success: true,
+          settings: updated,
+          availableItemGroups: db.getDistinctItemGroups(),
+          message: 'Pengaturan berhasil disimpan!'
+        });
       } catch (err) {
         return sendJson(req, res, 500, { success: false, message: err.message });
       }
@@ -596,8 +630,9 @@ const server = http.createServer((req, res) => {
     try {
       const stockDate = parsedUrl.searchParams.get('stockDate') || undefined;
       const days = parseInt(parsedUrl.searchParams.get('days') || '7', 10);
-      const targetDays = parseInt(parsedUrl.searchParams.get('targetDays') || '4', 10);
       const integrated = db.getIntegratedData(stockDate, days);
+      const targetDaysParam = parsedUrl.searchParams.get('targetDays');
+      const targetDays = targetDaysParam ? parseInt(targetDaysParam, 10) : (integrated.settings?.targetDays || 4);
       const recommendations = InventoryRebalancer.generateTransferRecommendations(integrated, { targetDays });
       return sendJson(req, res, 200, {
         success: true,
@@ -605,7 +640,8 @@ const server = http.createServer((req, res) => {
         salesDates: integrated.salesDates,
         count: recommendations.length,
         recommendations,
-        availableItemGroups: integrated.availableItemGroups
+        availableItemGroups: integrated.availableItemGroups,
+        settings: integrated.settings
       });
     } catch (err) {
       return sendJson(req, res, 500, { success: false, message: err.message });

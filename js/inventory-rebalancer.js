@@ -15,19 +15,33 @@ class InventoryRebalancer {
    * @returns {Array<Object>} List of actionable transfer recommendations
    */
   static generateTransferRecommendations(integratedData, options = {}) {
-    const targetDays = options.targetDays || 4;      // Target coverage days for receiver (3-5 hari cukup untuk konter)
     const minOverstockDays = options.minOverstockDays || 10; // Min days to consider sender overstocked (> 10 hari sudah overstock)
 
-    // Proteksi Cabang Asal (dapat diatur dari menu Admin Database)
+    // Pengaturan Global & Standar Kategori (dapat diatur dari Sidebar Pengaturan Transfer)
     const settings = integratedData.settings || {};
-    const minSenderKeepPcs = Math.max(1, parseInt(options.minSenderKeepPcs ?? settings.minSenderKeepPcs ?? 5, 10) || 5);
+    const globalTargetDays = Math.max(1, parseInt(options.targetDays ?? settings.targetDays ?? 4, 10) || 4);
+    const globalMinTransferQty = Math.max(1, parseInt(options.minTransferQty ?? settings.minTransferQty ?? 3, 10) || 3);
+    const globalMinSenderKeepPcs = Math.max(1, parseInt(options.minSenderKeepPcs ?? settings.minSenderKeepPcs ?? 5, 10) || 5);
     const maxTransferPct = Math.min(90, Math.max(10, parseInt(options.maxTransferPct ?? settings.maxTransferPct ?? 50, 10) || 50));
     const minKeepRatio = (100 - maxTransferPct) / 100; // Misal maxTransferPct = 50% -> wajib sisakan minimal 50% stok di cabang asal
-    const senderKeepDays = Math.max(options.senderKeepDays || 7, targetDays + 3); // Cabang pengirim aktif wajib aman minimal 7 hari
+    const categoryRulesMap = settings.categoryTransferRules || {};
 
     const recommendations = [];
 
     Object.values(integratedData.items).forEach(item => {
+      const catName = item.itemGroup || 'LAINNYA';
+      const catRule = categoryRulesMap[catName] || {};
+      const urgencyMode = catRule.urgencyMode || 'STANDAR';
+
+      // Jika kategori dinonaktifkan dari saran transfer oleh Admin, lewati
+      if (urgencyMode === 'NONAKTIF') return;
+
+      const itemTargetDays = Math.max(1, parseInt(catRule.targetDays ?? globalTargetDays, 10) || globalTargetDays);
+      const itemMinTransferQty = Math.max(1, parseInt(catRule.minTransferQty ?? globalMinTransferQty, 10) || globalMinTransferQty);
+      const itemMinSenderKeepPcs = Math.max(1, parseInt(catRule.minSenderKeepPcs ?? globalMinSenderKeepPcs, 10) || globalMinSenderKeepPcs);
+      const senderKeepDays = Math.max(options.senderKeepDays || 7, itemTargetDays + 3);
+      const categoryPriorityRank = urgencyMode === 'PRIORITAS_UTAMA' ? 3 : (urgencyMode === 'STANDAR' ? 2 : 1);
+
       const receivers = []; // Branches needing stock
       const senders = [];   // Branches or GDG that can send stock
 
@@ -51,42 +65,50 @@ class InventoryRebalancer {
 
         // Check if outlet is a receiver (Stockout, Must-Have Empty, Critical, or Low Stock)
         if (out.ads > 0 && outlet !== 'GDG') {
-          const minFloor = item.isMustHave ? 3 : 2;
-          const targetStock = Math.max(Math.ceil(out.ads * targetDays), minFloor);
-          if (out.stock < targetStock) {
-            const deficit = targetStock - out.stock;
-            const isUrgent = out.stock === 0 || out.doc < 2 || (item.isMustHave && out.stock <= 1);
-            receivers.push({
-              outlet,
-              stock: out.stock,
-              ads: out.ads,
-              doc: out.doc,
-              status: out.status,
-              deficit,
-              isHistoricalDemand: !!out.isHistoricalDemand,
-              isMustHaveStockout: !!out.isMustHaveStockout,
-              urgency: isUrgent ? 'HIGH' : 'MEDIUM'
-            });
+          // Jika mode kategori adalah HANYA_KOSONG, hanya cabang yang stoknya 0 PCS yang menjadi penerima
+          if (urgencyMode === 'HANYA_KOSONG' && out.stock > 0) {
+            // Skip non-empty branches for HANYA_KOSONG categories
+          } else {
+            const minFloor = Math.max(item.isMustHave ? 3 : 2, itemMinTransferQty);
+            const targetStock = Math.max(Math.ceil(out.ads * itemTargetDays), minFloor);
+            if (out.stock < targetStock) {
+              // Pastikan defisit minimal sebesar standar minimal kirim (`itemMinTransferQty`) agar tidak tanggung
+              const rawDeficit = targetStock - out.stock;
+              const deficit = Math.max(rawDeficit, itemMinTransferQty);
+              const isUrgent = out.stock === 0
+                || out.doc < (urgencyMode === 'PRIORITAS_UTAMA' ? 3 : 2)
+                || (item.isMustHave && out.stock <= 1);
+              receivers.push({
+                outlet,
+                stock: out.stock,
+                ads: out.ads,
+                doc: out.doc,
+                status: out.status,
+                deficit,
+                isHistoricalDemand: !!out.isHistoricalDemand,
+                isMustHaveStockout: !!out.isMustHaveStockout,
+                urgency: isUrgent ? 'HIGH' : 'MEDIUM'
+              });
+            }
           }
         }
 
         // Check if outlet is a sender (Verified Dead Stock, Overstocked, or High Idle Surplus)
         // ATURAN EMAS CABANG ASAL (NON-GDG):
         // Cabang ritel TIDAK BOLEH dikuras habis! Setiap cabang pengirim wajib menyisakan:
-        // 1) Minimal `minKeepByPcs` (stok pajangan/etalase wajib, default 5 PCS), DAN
+        // 1) Minimal `baseMinKeepPcs` (sesuai standar kategori / global), DAN
         // 2) Minimal `minKeepByPct` (persentase stok wajib tinggal, default 50% dari stok awal), DAN
         // 3) Minimal `minKeepByAds` (kebutuhan jualan cabang pengirim sendiri selama 7 hari).
         if (outlet !== 'GDG' && out.stock > 0) {
-          const baseMinKeepPcs = item.isMustHave ? Math.max(minSenderKeepPcs, 5) : minSenderKeepPcs;
+          const baseMinKeepPcs = item.isMustHave ? Math.max(itemMinSenderKeepPcs, 5) : itemMinSenderKeepPcs;
           const minKeepByPct = Math.ceil(out.stock * minKeepRatio);
           const minKeepByAds = out.ads > 0 ? Math.ceil(out.ads * senderKeepDays) : 0;
 
           // 1) Status DEAD_STOCK: Terbukti tidak laku >= deadStockDaysSetting dan bukan barang baru beli
-          //    Tetap sisakan minimal stok pajangan (min 3 PCS atau minSenderKeepPcs) & minimal % stok wajib tinggal
           if (out.status === 'DEAD_STOCK') {
             const keepStock = Math.max(Math.min(baseMinKeepPcs, 3), minKeepByPct);
             const available = Math.max(0, out.stock - keepStock);
-            if (available >= 2) {
+            if (available >= itemMinTransferQty) {
               const daysUnsold = out.neverSold
                 ? `Belum pernah terjual di cabang ini`
                 : `Tidak terjual ${out.agingDays} hari`;
@@ -105,11 +127,11 @@ class InventoryRebalancer {
               });
             }
           }
-          // 2) Overstocked active branch: wajib sisakan 7 hari penjualan, minimal PCS pajangan, dan minimal % stok tinggal
+          // 2) Overstocked active branch: wajib sisakan 7 hari penjualan, minimal PCS pajangan kategori, dan minimal % stok tinggal
           else if (out.ads > 0 && (out.doc >= minOverstockDays || out.stock > Math.ceil(out.ads * 12))) {
             const keepStock = Math.max(baseMinKeepPcs, minKeepByPct, minKeepByAds);
             const excess = Math.max(0, out.stock - keepStock);
-            if (excess >= 2) {
+            if (excess >= itemMinTransferQty) {
               senders.push({
                 outlet,
                 stock: out.stock,
@@ -125,12 +147,10 @@ class InventoryRebalancer {
             }
           }
           // 3) High Idle Surplus: belum melewati batas hari Dead Stock, tapi menumpuk tinggi tanpa penjualan
-          //    Hanya boleh dipakai untuk menolong cabang yang sedang HIGH urgency (Stok 0 / Kritis),
-          //    dan wajib menyisakan minimal stok pajangan + minimal % stok di cabang pengirim.
           else if (out.status === 'IDLE' && !out.isNewStock) {
             const keepStock = Math.max(baseMinKeepPcs, minKeepByPct);
             const surplus = Math.max(0, out.stock - keepStock);
-            if (surplus >= 2) {
+            if (surplus >= itemMinTransferQty) {
               senders.push({
                 outlet,
                 stock: out.stock,
@@ -170,16 +190,22 @@ class InventoryRebalancer {
 
         for (const sender of senders) {
           if (remainingNeed <= 0) break;
-          if (sender.available <= 0) continue;
+          // Jangan kirim jika ketersediaan cabang pengirim di bawah standar minimal pengiriman (`itemMinTransferQty`)
+          if (sender.available < itemMinTransferQty) continue;
           if (sender.outlet === receiver.outlet) continue;
           // Idle surplus senders only rescue HIGH urgency receivers (0 stock / critical)
           if (sender.isIdleSurplus && receiver.urgency !== 'HIGH') continue;
 
-          // Jika pengirim adalah sesama cabang ritel (bukan GDG), batasi jumlah per rute transfer
-          // maksimal 12 PCS (atau kebutuhan darurat 2-3 hari), agar 1 cabang ritel tidak terkuras oleh 1 cabang besar
-          const peerCap = sender.isGudang ? remainingNeed : Math.min(remainingNeed, Math.max(6, Math.ceil(receiver.ads * 2.5), 12));
+          // Jika sisa kebutuhan < itemMinTransferQty tapi pengirim masih punya >= itemMinTransferQty,
+          // genapkan ke itemMinTransferQty agar jumlah pengiriman selalu memenuhi standar minimal (misal min 3 PCS)
+          const desiredQty = Math.max(remainingNeed, itemMinTransferQty);
+          const peerCap = sender.isGudang
+            ? desiredQty
+            : Math.min(desiredQty, Math.max(itemMinTransferQty, Math.ceil(receiver.ads * 2.5), 12));
           const transferQty = Math.min(peerCap, sender.available);
-          if (transferQty <= 0) continue;
+
+          // Wajib memenuhi batas minimal pengiriman per rute (`itemMinTransferQty`)
+          if (transferQty < itemMinTransferQty) continue;
 
           sender.available -= transferQty;
           sender.remainingStock -= transferQty;
@@ -204,7 +230,10 @@ class InventoryRebalancer {
             itemCode: item.code,
             itemName: item.name,
             merk: item.merk,
-            itemGroup: item.itemGroup,
+            itemGroup: catName,
+            categoryUrgencyMode: urgencyMode,
+            categoryPriorityRank,
+            minTransferRule: itemMinTransferQty,
             isMustHave: !!item.isMustHave,
             fromOutlet: sender.outlet,
             toOutlet: receiver.outlet,
@@ -223,12 +252,13 @@ class InventoryRebalancer {
       });
     });
 
-    // Sort global recommendations: Must-Have HIGH urgency first, then HIGH urgency, then highest qty
+    // Sort global recommendations: Urgency HIGH -> Category Priority Rank -> Must-Have -> 0-Stock -> ADS
     recommendations.sort((a, b) => {
       if (a.urgency !== b.urgency) return a.urgency === 'HIGH' ? -1 : 1;
+      if (b.categoryPriorityRank !== a.categoryPriorityRank) return b.categoryPriorityRank - a.categoryPriorityRank;
       if (a.isMustHave !== b.isMustHave) return a.isMustHave ? -1 : 1;
       if ((a.receiverStock === 0) !== (b.receiverStock === 0)) return a.receiverStock === 0 ? -1 : 1;
-      return b. receiverADS - a.receiverADS;
+      return b.receiverADS - a.receiverADS;
     });
 
     return recommendations;

@@ -1624,6 +1624,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const badge = document.getElementById('badge-transfer-count');
       if (badge) badge.textContent = json.count || 0;
 
+      // Update active transfer standards summary bar if settings returned
+      if (json.settings) {
+        updateActiveRulesSummaryBar(json.settings);
+      }
+
       // Populate merk & category filters
       populateRebalanceMerkFilter(rebalanceRecommendations);
       populateCategoryFilter('rebalance-category-filter', json.availableItemGroups);
@@ -1704,6 +1709,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const mustHaveBadge = r.isMustHave
         ? ` <span class="status-badge" style="background: rgba(239, 68, 68, 0.16); color: #f87171; font-size: 9.5px; padding: 1px 5px;">🔥 WAJIB ADA</span>`
         : '';
+      const catPriorityBadge = r.categoryUrgencyMode === 'PRIORITAS_UTAMA'
+        ? `<span style="font-size: 9.5px; color: var(--status-warning); font-weight: 700;">★ Prioritas</span>`
+        : (r.categoryUrgencyMode === 'HANYA_KOSONG' ? `<span style="font-size: 9.5px; color: var(--text-muted);">Khusus 0-Stok</span>` : '');
 
       const senderRemain = r.senderRemainingStock !== undefined ? r.senderRemainingStock : Math.max(0, (r.senderStock || 0) - r.qty);
       const receiverAfter = (r.receiverStock || 0) + r.qty;
@@ -1717,7 +1725,7 @@ document.addEventListener('DOMContentLoaded', () => {
           </td>
           <td>
             <div style="font-size: 11.5px; color: var(--accent-cyan);">${escapeHtml(r.merk || '-')}</div>
-            <div style="font-size: 10px; color: var(--text-muted);">${escapeHtml(r.itemGroup || '-')}</div>
+            <div style="font-size: 10px; color: var(--text-muted);">${escapeHtml(r.itemGroup || '-')} ${catPriorityBadge}</div>
           </td>
           <td>
             <span class="transfer-from-tag">${escapeHtml(r.fromOutlet)}</span>
@@ -1787,6 +1795,282 @@ document.addEventListener('DOMContentLoaded', () => {
         XLSX.utils.book_append_sheet(wb, ws, 'Slip_Transfer');
         const filename = `Rekomendasi_Transfer_Cabang_${appState.currentDate || 'Aktif'}.xlsx`;
         XLSX.writeFile(wb, filename);
+      });
+    }
+
+    setupTransferSettingsDrawer();
+  }
+
+  // ============================================================
+  // RIGHT SIDEBAR DRAWER: STANDAR & ATURAN TRANSFER KATEGORI
+  // ============================================================
+  const DEFAULT_CATEGORY_RULES = {
+    'VOUCHER': { urgencyMode: 'PRIORITAS_UTAMA', minTransferQty: 3, minSenderKeepPcs: 5, targetDays: 4 },
+    'SP': { urgencyMode: 'PRIORITAS_UTAMA', minTransferQty: 3, minSenderKeepPcs: 4, targetDays: 4 },
+    'PETSHOP': { urgencyMode: 'STANDAR', minTransferQty: 3, minSenderKeepPcs: 4, targetDays: 5 },
+    'ACC CAMPURAN NEW': { urgencyMode: 'HANYA_KOSONG', minTransferQty: 2, minSenderKeepPcs: 2, targetDays: 5 },
+    'ACC CAMPURAN LAMA': { urgencyMode: 'HANYA_KOSONG', minTransferQty: 2, minSenderKeepPcs: 2, targetDays: 4 },
+    'ATK': { urgencyMode: 'HANYA_KOSONG', minTransferQty: 3, minSenderKeepPcs: 3, targetDays: 5 },
+    'KERTAS STRUK': { urgencyMode: 'HANYA_KOSONG', minTransferQty: 3, minSenderKeepPcs: 3, targetDays: 5 },
+    'LAINNYA': { urgencyMode: 'STANDAR', minTransferQty: 3, minSenderKeepPcs: 4, targetDays: 4 }
+  };
+
+  function updateActiveRulesSummaryBar(settings) {
+    const bar = document.getElementById('rebalance-active-rules-summary');
+    if (!bar || !settings) return;
+
+    const minQty = settings.minTransferQty ?? 3;
+    const minKeep = settings.minSenderKeepPcs ?? 5;
+    const maxPct = settings.maxTransferPct ?? 50;
+    const targetDays = settings.targetDays ?? 4;
+    const rules = settings.categoryTransferRules || DEFAULT_CATEGORY_RULES;
+
+    const catPills = Object.entries(rules).map(([cat, r]) => {
+      if (r.urgencyMode === 'NONAKTIF') {
+        return `<span class="status-badge" style="background: rgba(107,114,128,0.18); color: var(--text-muted); font-size: 10px;">🚫 ${escapeHtml(cat)}: OFF</span>`;
+      }
+      const icon = r.urgencyMode === 'PRIORITAS_UTAMA' ? '🔥' : (r.urgencyMode === 'HANYA_KOSONG' ? '🛡️' : '⚡');
+      return `<span class="status-badge" style="background: rgba(6,182,212,0.1); color: var(--text-primary); font-size: 10px; border: 1px solid rgba(6,182,212,0.25);">${icon} ${escapeHtml(cat)}: Min Kirim <strong>${r.minTransferQty}</strong> · Sisa <strong>${r.minSenderKeepPcs}</strong></span>`;
+    }).join(' ');
+
+    bar.innerHTML = `
+      <span><strong style="color: var(--accent-cyan);">Standar Global:</strong> Min Kirim <strong>${minQty} PCS</strong> · Sisa Asal &ge; <strong>${minKeep} PCS</strong> · Maks Tarik <strong>${maxPct}%</strong> · Target <strong>${targetDays} Hr</strong></span>
+      <span style="opacity: 0.35;">|</span>
+      ${catPills}
+    `;
+  }
+
+  function renderCategoryRulesInDrawer(categories, rulesMap) {
+    const listEl = document.getElementById('drawer-category-rules-list');
+    if (!listEl) return;
+
+    const allCats = Array.from(new Set([
+      ...Object.keys(DEFAULT_CATEGORY_RULES),
+      ...(Array.isArray(categories) ? categories : [])
+    ]));
+
+    listEl.innerHTML = allCats.map(cat => {
+      const def = DEFAULT_CATEGORY_RULES[cat] || { urgencyMode: 'STANDAR', minTransferQty: 3, minSenderKeepPcs: 4, targetDays: 4 };
+      const rule = (rulesMap && rulesMap[cat]) ? { ...def, ...rulesMap[cat] } : def;
+
+      return `
+        <div class="category-rule-card" data-category-card="${escapeHtml(cat)}">
+          <div class="category-rule-top">
+            <span class="category-rule-name">${escapeHtml(cat)}</span>
+            <select class="category-rule-select" data-cat-field="urgencyMode">
+              <option value="PRIORITAS_UTAMA" ${rule.urgencyMode === 'PRIORITAS_UTAMA' ? 'selected' : ''}>🔥 Prioritas Utama (Wajib Ada)</option>
+              <option value="STANDAR" ${rule.urgencyMode === 'STANDAR' ? 'selected' : ''}>⚡ Standar Normal (DoC & ADS)</option>
+              <option value="HANYA_KOSONG" ${rule.urgencyMode === 'HANYA_KOSONG' ? 'selected' : ''}>🛡️ Hanya Saat Cabang 0 PCS</option>
+              <option value="NONAKTIF" ${rule.urgencyMode === 'NONAKTIF' ? 'selected' : ''}>🚫 Nonaktifkan Transfer</option>
+            </select>
+          </div>
+          <div class="category-rule-inputs">
+            <div>
+              <label>Min Kirim (PCS)</label>
+              <input type="number" min="1" max="100" value="${rule.minTransferQty}" data-cat-field="minTransferQty">
+            </div>
+            <div>
+              <label>Min Sisa Asal (PCS)</label>
+              <input type="number" min="1" max="100" value="${rule.minSenderKeepPcs}" data-cat-field="minSenderKeepPcs">
+            </div>
+            <div>
+              <label>Target Tujuan (Hr)</label>
+              <input type="number" min="1" max="30" value="${rule.targetDays}" data-cat-field="targetDays">
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  async function openTransferSettingsDrawer() {
+    const drawer = document.getElementById('transfer-settings-drawer');
+    const backdrop = document.getElementById('transfer-settings-backdrop');
+    if (!drawer || !backdrop) return;
+
+    backdrop.style.display = 'block';
+    setTimeout(() => {
+      backdrop.classList.add('active');
+      drawer.classList.add('open');
+      drawer.setAttribute('aria-hidden', 'false');
+    }, 10);
+
+    try {
+      const res = await fetch('/api/settings');
+      const json = await res.json();
+      if (json.success && json.settings) {
+        const s = json.settings;
+        const elMinQty = document.getElementById('drawer-min-transfer-qty');
+        const elMinKeep = document.getElementById('drawer-min-keep-pcs');
+        const elMaxPct = document.getElementById('drawer-max-transfer-pct');
+        const elTargetDays = document.getElementById('drawer-target-days');
+        const elDeadDays = document.getElementById('drawer-deadstock-days');
+
+        if (elMinQty) elMinQty.value = s.minTransferQty ?? 3;
+        if (elMinKeep) elMinKeep.value = s.minSenderKeepPcs ?? 5;
+        if (elMaxPct) elMaxPct.value = s.maxTransferPct ?? 50;
+        if (elTargetDays) elTargetDays.value = s.targetDays ?? 4;
+        if (elDeadDays) elDeadDays.value = s.deadStockDays ?? 30;
+
+        renderCategoryRulesInDrawer(json.availableItemGroups || [], s.categoryTransferRules || DEFAULT_CATEGORY_RULES);
+      }
+    } catch (e) {
+      console.warn('Gagal memuat pengaturan transfer:', e);
+      renderCategoryRulesInDrawer([], DEFAULT_CATEGORY_RULES);
+    }
+
+    if (window.lucide) lucide.createIcons();
+  }
+
+  function closeTransferSettingsDrawer() {
+    const drawer = document.getElementById('transfer-settings-drawer');
+    const backdrop = document.getElementById('transfer-settings-backdrop');
+    if (!drawer || !backdrop) return;
+
+    drawer.classList.remove('open');
+    backdrop.classList.remove('active');
+    drawer.setAttribute('aria-hidden', 'true');
+    setTimeout(() => {
+      backdrop.style.display = 'none';
+    }, 240);
+  }
+
+  function setupTransferSettingsDrawer() {
+    const btnOpenTab = document.getElementById('btn-open-transfer-settings');
+    const btnOpenInline = document.getElementById('btn-open-transfer-settings-inline');
+    const btnOpenSidebar = document.getElementById('btn-open-transfer-settings-sidebar');
+    const btnClose = document.getElementById('btn-close-transfer-settings');
+    const backdrop = document.getElementById('transfer-settings-backdrop');
+    const btnApplyGlobal = document.getElementById('btn-apply-global-to-categories');
+    const btnReset = document.getElementById('btn-reset-transfer-settings');
+    const btnSave = document.getElementById('btn-save-transfer-settings');
+    const feedback = document.getElementById('drawer-settings-feedback');
+
+    [btnOpenTab, btnOpenInline, btnOpenSidebar].forEach(btn => {
+      if (!btn || btn.dataset.drawerWired) return;
+      btn.dataset.drawerWired = '1';
+      btn.addEventListener('click', () => {
+        openTransferSettingsDrawer();
+      });
+    });
+
+    if (btnClose && !btnClose.dataset.drawerWired) {
+      btnClose.dataset.drawerWired = '1';
+      btnClose.addEventListener('click', closeTransferSettingsDrawer);
+    }
+    if (backdrop && !backdrop.dataset.drawerWired) {
+      backdrop.dataset.drawerWired = '1';
+      backdrop.addEventListener('click', closeTransferSettingsDrawer);
+    }
+
+    if (btnApplyGlobal && !btnApplyGlobal.dataset.drawerWired) {
+      btnApplyGlobal.dataset.drawerWired = '1';
+      btnApplyGlobal.addEventListener('click', () => {
+        const minQty = parseInt(document.getElementById('drawer-min-transfer-qty')?.value || '3', 10) || 3;
+        const minKeep = parseInt(document.getElementById('drawer-min-keep-pcs')?.value || '5', 10) || 5;
+        const targetDays = parseInt(document.getElementById('drawer-target-days')?.value || '4', 10) || 4;
+
+        document.querySelectorAll('#drawer-category-rules-list .category-rule-card').forEach(card => {
+          const qInput = card.querySelector('[data-cat-field="minTransferQty"]');
+          const kInput = card.querySelector('[data-cat-field="minSenderKeepPcs"]');
+          const tInput = card.querySelector('[data-cat-field="targetDays"]');
+          if (qInput) qInput.value = minQty;
+          if (kInput) kInput.value = minKeep;
+          if (tInput) tInput.value = targetDays;
+        });
+      });
+    }
+
+    if (btnReset && !btnReset.dataset.drawerWired) {
+      btnReset.dataset.drawerWired = '1';
+      btnReset.addEventListener('click', () => {
+        const elMinQty = document.getElementById('drawer-min-transfer-qty');
+        const elMinKeep = document.getElementById('drawer-min-keep-pcs');
+        const elMaxPct = document.getElementById('drawer-max-transfer-pct');
+        const elTargetDays = document.getElementById('drawer-target-days');
+        const elDeadDays = document.getElementById('drawer-deadstock-days');
+        if (elMinQty) elMinQty.value = 3;
+        if (elMinKeep) elMinKeep.value = 5;
+        if (elMaxPct) elMaxPct.value = 50;
+        if (elTargetDays) elTargetDays.value = 4;
+        if (elDeadDays) elDeadDays.value = 30;
+        renderCategoryRulesInDrawer([], DEFAULT_CATEGORY_RULES);
+      });
+    }
+
+    if (btnSave && !btnSave.dataset.drawerWired) {
+      btnSave.dataset.drawerWired = '1';
+      btnSave.addEventListener('click', async () => {
+        const minTransferQty = parseInt(document.getElementById('drawer-min-transfer-qty')?.value || '3', 10);
+        const minSenderKeepPcs = parseInt(document.getElementById('drawer-min-keep-pcs')?.value || '5', 10);
+        const maxTransferPct = parseInt(document.getElementById('drawer-max-transfer-pct')?.value || '50', 10);
+        const targetDays = parseInt(document.getElementById('drawer-target-days')?.value || '4', 10);
+        const deadStockDays = parseInt(document.getElementById('drawer-deadstock-days')?.value || '30', 10);
+
+        const categoryTransferRules = {};
+        document.querySelectorAll('#drawer-category-rules-list .category-rule-card').forEach(card => {
+          const cat = card.getAttribute('data-category-card');
+          if (!cat) return;
+          const urgencyMode = card.querySelector('[data-cat-field="urgencyMode"]')?.value || 'STANDAR';
+          const catMinQty = parseInt(card.querySelector('[data-cat-field="minTransferQty"]')?.value || String(minTransferQty), 10) || minTransferQty;
+          const catMinKeep = parseInt(card.querySelector('[data-cat-field="minSenderKeepPcs"]')?.value || String(minSenderKeepPcs), 10) || minSenderKeepPcs;
+          const catTarget = parseInt(card.querySelector('[data-cat-field="targetDays"]')?.value || String(targetDays), 10) || targetDays;
+          categoryTransferRules[cat] = {
+            urgencyMode,
+            minTransferQty: catMinQty,
+            minSenderKeepPcs: catMinKeep,
+            targetDays: catTarget
+          };
+        });
+
+        btnSave.disabled = true;
+        btnSave.innerHTML = '<i data-lucide="loader-2" class="spin"></i> Menyimpan...';
+        if (window.lucide) lucide.createIcons();
+
+        try {
+          const res = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              minTransferQty,
+              minSenderKeepPcs,
+              maxTransferPct,
+              targetDays,
+              deadStockDays,
+              categoryTransferRules
+            })
+          });
+          const json = await res.json();
+          if (res.ok && json.success) {
+            updateActiveRulesSummaryBar(json.settings);
+            // Sinkronkan juga input di tab Kelola Database jika ada
+            const dbDead = document.getElementById('input-setting-deadstock-days');
+            const dbKeep = document.getElementById('input-setting-min-keep-pcs');
+            const dbPct = document.getElementById('input-setting-max-transfer-pct');
+            if (dbDead) dbDead.value = deadStockDays;
+            if (dbKeep) dbKeep.value = minSenderKeepPcs;
+            if (dbPct) dbPct.value = maxTransferPct;
+
+            if (feedback) {
+              feedback.style.display = 'block';
+              feedback.style.color = 'var(--status-success)';
+              feedback.textContent = '✓ Standar transfer & aturan per kategori berhasil disimpan dan diterapkan!';
+              setTimeout(() => { feedback.style.display = 'none'; }, 3500);
+            }
+
+            await loadRebalanceData();
+            if (typeof loadPOData === 'function') loadPOData();
+            if (typeof loadABCAgingData === 'function') loadABCAgingData();
+          } else {
+            alert(json.message || 'Gagal menyimpan pengaturan.');
+          }
+        } catch (err) {
+          alert('Gagal menyimpan: ' + err.message);
+        } finally {
+          btnSave.disabled = false;
+          btnSave.innerHTML = '<i data-lucide="save"></i> Simpan & Terapkan Standar';
+          if (window.lucide) lucide.createIcons();
+        }
       });
     }
   }

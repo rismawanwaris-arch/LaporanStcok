@@ -1710,12 +1710,34 @@ class StockDatabase {
 
   getAllSettings() {
     const rows = this.db.prepare(`SELECT key, value FROM app_settings`).all();
+    const defaultCategoryRules = {
+      'VOUCHER': { urgencyMode: 'PRIORITAS_UTAMA', minTransferQty: 3, minSenderKeepPcs: 5, targetDays: 4 },
+      'SP': { urgencyMode: 'PRIORITAS_UTAMA', minTransferQty: 3, minSenderKeepPcs: 4, targetDays: 4 },
+      'PETSHOP': { urgencyMode: 'STANDAR', minTransferQty: 3, minSenderKeepPcs: 4, targetDays: 5 },
+      'ACC CAMPURAN NEW': { urgencyMode: 'HANYA_KOSONG', minTransferQty: 2, minSenderKeepPcs: 2, targetDays: 5 },
+      'ACC CAMPURAN LAMA': { urgencyMode: 'HANYA_KOSONG', minTransferQty: 2, minSenderKeepPcs: 2, targetDays: 4 },
+      'ATK': { urgencyMode: 'HANYA_KOSONG', minTransferQty: 3, minSenderKeepPcs: 3, targetDays: 5 },
+      'KERTAS STRUK': { urgencyMode: 'HANYA_KOSONG', minTransferQty: 3, minSenderKeepPcs: 3, targetDays: 5 },
+      'LAINNYA': { urgencyMode: 'STANDAR', minTransferQty: 3, minSenderKeepPcs: 4, targetDays: 4 }
+    };
     const map = {
       deadStockDays: 30,     // default konter pulsa: 30 hari
+      minTransferQty: 3,     // default minimal qty yang dikirim per rute: 3 PCS
       minSenderKeepPcs: 5,   // default stok pajangan minimal wajib tinggal di cabang asal: 5 PCS
-      maxTransferPct: 50     // default maksimal % stok cabang asal yang boleh ditarik: 50%
+      maxTransferPct: 50,    // default maksimal % stok cabang asal yang boleh ditarik: 50%
+      targetDays: 4,         // default target hari ketahanan cabang tujuan: 4 hari
+      categoryTransferRules: defaultCategoryRules
     };
     rows.forEach(r => {
+      if (r.key === 'categoryTransferRules') {
+        try {
+          const parsed = JSON.parse(r.value);
+          if (parsed && typeof parsed === 'object') {
+            map.categoryTransferRules = { ...defaultCategoryRules, ...parsed };
+          }
+        } catch (_) {}
+        return;
+      }
       const num = parseInt(r.value, 10);
       map[r.key] = isNaN(num) ? r.value : num;
     });
