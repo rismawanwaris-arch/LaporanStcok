@@ -1828,5 +1828,187 @@ body.light-mode .settings-drawer-footer {
   background: #f8fafc;
 }
 
+/* ============================================================ */
+/* EXTENDABLE OUTLET BADGES & MODAL DETAILS                     */
+/* ============================================================ */
+.btn-extend-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  border-radius: 5px;
+  font-size: 10.5px;
+  font-weight: 700;
+  background: rgba(6, 182, 212, 0.16);
+  color: var(--accent-cyan);
+  border: 1px dashed rgba(6, 182, 212, 0.45);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  vertical-align: middle;
+  line-height: 1.4;
+}
+
+.btn-extend-badge:hover {
+  background: rgba(6, 182, 212, 0.32);
+  border-style: solid;
+  transform: translateY(-1px);
+}
+
+.btn-collapse-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  border-radius: 5px;
+  font-size: 10.5px;
+  font-weight: 700;
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--text-secondary);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  vertical-align: middle;
+  line-height: 1.4;
+}
+
+.btn-collapse-badge:hover {
+  background: rgba(148, 163, 184, 0.28);
+  color: var(--text-primary);
+}
+
+.btn-modal-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  background: transparent;
+  color: var(--accent-cyan);
+  border: 1px solid rgba(6, 182, 212, 0.35);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  vertical-align: middle;
+  line-height: 1.4;
+  margin-left: 3px;
+}
+
+.btn-modal-badge:hover {
+  background: rgba(6, 182, 212, 0.2);
+  border-color: var(--accent-cyan);
+}
+
+/* Modal Backdrop & Dialog */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.72);
+  backdrop-filter: blur(4px);
+  z-index: 1300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  animation: fadeInModal 0.2s ease forwards;
+}
+
+.custom-modal {
+  width: 860px;
+  max-width: 95vw;
+  max-height: 90vh;
+  background: var(--card-bg, #0f172a);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: scaleInModal 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+body.light-mode .custom-modal {
+  background: #ffffff;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.16);
+}
+
+@keyframes fadeInModal {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scaleInModal {
+  from { opacity: 0; transform: scale(0.96) translateY(6px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.modal-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--panel-border);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modal-body {
+  padding: 16px 20px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* Outlets Grid in Modal */
+.outlets-grid-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.outlet-detail-card {
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  transition: all 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+body.light-mode .outlet-detail-card {
+  background: #f8fafc;
+}
+
+.outlet-detail-card:hover {
+  border-color: rgba(6, 182, 212, 0.4);
+  transform: translateY(-1px);
+}
+
+.outlet-detail-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.outlet-detail-card-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.outlet-detail-card-metrics {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.outlet-detail-card-metrics strong {
+  color: var(--text-primary);
+}
+
+
 
 
