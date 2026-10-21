@@ -1359,8 +1359,131 @@ class StockDatabase {
     // "Perlu Perhatian": bottom half of the network by revenue AND above-average stockout rate
     const avgStockoutRate = outlets.length > 0 ? outlets.reduce((s, o) => s + o.stockoutRate, 0) / outlets.length : 0;
     const medianRank = outlets.length / 2;
+
+    // Cross-reference with current integrated stock & transfer recommendations for rich diagnostics
+    let integrated = null;
+    let transferRecs = [];
+    try {
+      integrated = this.getIntegratedData(undefined, 7);
+      const Rebalancer = require('./js/inventory-rebalancer.js');
+      transferRecs = Rebalancer.generateTransferRecommendations(integrated);
+    } catch (e) {
+      console.warn('[OutletPerf] Cross-reference rebalancer error:', e.message);
+    }
+
     outlets.forEach(o => {
       o.needsAttention = o.rank > medianRank && o.stockoutRate > avgStockoutRate;
+
+      const emptyItems = [];
+      const criticalItems = [];
+      const deadStockItems = [];
+
+      if (integrated && integrated.items) {
+        Object.values(integrated.items).forEach(item => {
+          if (itemGroup && item.itemGroup !== itemGroup) return;
+          const out = item.outlets[o.outlet];
+          if (!out) return;
+          if (out.status === 'OUT_OF_STOCK') {
+            emptyItems.push({
+              code: item.code,
+              name: item.name,
+              merk: item.merk,
+              itemGroup: item.itemGroup,
+              ads: out.ads,
+              isMustHave: !!item.isMustHave,
+              status: 'OUT_OF_STOCK',
+              stock: out.stock
+            });
+          } else if (out.status === 'CRITICAL') {
+            criticalItems.push({
+              code: item.code,
+              name: item.name,
+              merk: item.merk,
+              itemGroup: item.itemGroup,
+              ads: out.ads,
+              isMustHave: !!item.isMustHave,
+              status: 'CRITICAL',
+              stock: out.stock,
+              doc: out.doc
+            });
+          } else if (out.status === 'DEAD_STOCK') {
+            deadStockItems.push({
+              code: item.code,
+              name: item.name,
+              merk: item.merk,
+              itemGroup: item.itemGroup,
+              ads: 0,
+              status: 'DEAD_STOCK',
+              stock: out.stock,
+              agingDays: out.agingDays
+            });
+          }
+        });
+      }
+
+      emptyItems.sort((a, b) => {
+        if (a.isMustHave !== b.isMustHave) return a.isMustHave ? -1 : 1;
+        return b.ads - a.ads;
+      });
+      criticalItems.sort((a, b) => {
+        if (a.isMustHave !== b.isMustHave) return a.isMustHave ? -1 : 1;
+        return b.ads - a.ads;
+      });
+      deadStockItems.sort((a, b) => b.stock - a.stock);
+
+      const incoming = transferRecs.filter(r => r.toOutlet === o.outlet);
+      const outgoing = transferRecs.filter(r => r.fromOutlet === o.outlet);
+
+      o.emptyCount = emptyItems.length;
+      o.mustHaveEmptyCount = emptyItems.filter(i => i.isMustHave).length;
+      o.criticalCount = criticalItems.length;
+      o.deadStockCount = deadStockItems.length;
+
+      o.incomingTransferCount = incoming.length;
+      o.incomingTransferQty = incoming.reduce((s, r) => s + r.qty, 0);
+      o.outgoingTransferCount = outgoing.length;
+      o.outgoingTransferQty = outgoing.reduce((s, r) => s + r.qty, 0);
+
+      o.incomingTransfers = incoming.map(r => ({
+        itemCode: r.itemCode,
+        itemName: r.itemName,
+        merk: r.merk,
+        itemGroup: r.itemGroup,
+        fromOutlet: r.fromOutlet,
+        qty: r.qty,
+        urgency: r.urgency,
+        isMustHave: !!r.isMustHave,
+        reason: r.reason
+      }));
+
+      o.problematicItems = {
+        empty: emptyItems,
+        critical: criticalItems,
+        deadStock: deadStockItems.slice(0, 40)
+      };
+
+      const reasons = [];
+      if (o.stockoutRate > avgStockoutRate) {
+        reasons.push(`Tingkat kekosongan stok ${o.stockoutRate}% di atas rata-rata jaringan (${avgStockoutRate.toFixed(1)}%).`);
+      }
+      if (o.rank > medianRank) {
+        reasons.push(`Peringkat omzet #${o.rank} berada di paruh bawah jaringan (kontribusi ${o.revenueSharePct}%).`);
+      }
+      if (o.emptyCount > 0) {
+        const mustHaveNote = o.mustHaveEmptyCount > 0 ? ` (termasuk ${o.mustHaveEmptyCount} SKU Wajib Ada!)` : '';
+        reasons.push(`Terdapat ${o.emptyCount} produk mengalami stok 0 PCS di cabang ini${mustHaveNote}.`);
+      }
+      if (o.criticalCount > 0) {
+        reasons.push(`Terdapat ${o.criticalCount} produk berstatus Kritis (< 2 hari ketahanan stok).`);
+      }
+      if (o.deadStockCount > 10) {
+        reasons.push(`Terdapat ${o.deadStockCount} produk menumpuk pasif tanpa penjualan (Dead Stock).`);
+      }
+      if (o.incomingTransferCount > 0) {
+        reasons.push(`Tersedia ${o.incomingTransferCount} rekomendasi transfer masuk (${o.incomingTransferQty} PCS) untuk menyelamatkan stok cabang ini.`);
+      }
+
+      o.attentionReasons = reasons;
     });
 
     return {

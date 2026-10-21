@@ -2115,7 +2115,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const query = (document.getElementById('coverage-search-input')?.value || '').toLowerCase().trim();
 
     let items = Object.values(coverageData.items).filter(item => {
-      if (query && !item.name.toLowerCase().includes(query) && !item.code.includes(query)) return false;
+      if (query) {
+        const matchNameOrCode = item.name.toLowerCase().includes(query) || item.code.toLowerCase().includes(query);
+        const matchOutlet = !matchNameOrCode && Object.entries(item.outlets || {}).some(([out, outData]) => {
+          return out.toLowerCase().includes(query) && (outData.status === 'EMPTY' || outData.status === 'CRITICAL' || outData.stock > 0 || outData.ads > 0);
+        });
+        if (!matchNameOrCode && !matchOutlet) return false;
+      }
       if (categoryFilter !== 'ALL' && item.itemGroup !== categoryFilter) return false;
 
       if (statusFilter === 'MUST_HAVE') {
@@ -2738,7 +2744,12 @@ document.addEventListener('DOMContentLoaded', () => {
       if (statusFilter !== 'ALL' && classifyStockoutStatus(item) !== statusFilter) return false;
       if (merkFilter !== 'ALL' && item.merk !== merkFilter) return false;
       if (categoryFilter !== 'ALL' && item.itemGroup !== categoryFilter) return false;
-      if (query && !item.name.toLowerCase().includes(query) && !item.code.toLowerCase().includes(query)) return false;
+      if (query) {
+        const matchNameOrCode = item.name.toLowerCase().includes(query) || item.code.toLowerCase().includes(query);
+        const matchWorst = (item.worstOutlet || '').toLowerCase().includes(query);
+        const matchOutletList = !matchNameOrCode && !matchWorst && (item.outletDetails || []).some(o => o.outlet.toLowerCase().includes(query) && o.daysOutOfStock > 0);
+        if (!matchNameOrCode && !matchWorst && !matchOutletList) return false;
+      }
       return true;
     });
 
@@ -3097,20 +3108,34 @@ document.addEventListener('DOMContentLoaded', () => {
     filtered = applyColumnSort(filtered, 'outlet-table-body');
 
     if (filtered.length === 0) {
-      tableBody.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 40px; color: var(--text-muted);">Tidak ada cabang yang sesuai filter.</td></tr>`;
+      tableBody.innerHTML = `<tr><td colspan="11" style="text-align: center; padding: 40px; color: var(--text-muted);">Tidak ada cabang yang sesuai filter.</td></tr>`;
       return;
     }
 
     let rowsHtml = '';
     filtered.forEach(o => {
       const statusBadge = o.needsAttention
-        ? `<span class="status-badge badge-high-urgency">🔴 Perlu Perhatian</span>`
-        : `<span class="status-badge" style="background: rgba(16, 185, 129, 0.12); color: var(--status-success);">🟢 Sehat</span>`;
+        ? `<button type="button" class="btn-diagnose-outlet btn-diagnose-attention" data-action="diagnose-outlet" data-outlet="${escapeHtml(o.outlet)}" title="Klik untuk melihat diagnosa detail & tindak lanjut">
+             <span>🔴 Perlu Perhatian</span>
+             <span style="font-size: 9.5px; opacity: 0.85; margin-left: 2px;">(${o.emptyCount || 0} kosong · ${o.incomingTransferCount || 0} tf)</span>
+           </button>`
+        : `<button type="button" class="btn-diagnose-outlet btn-diagnose-healthy" data-action="diagnose-outlet" data-outlet="${escapeHtml(o.outlet)}" title="Klik untuk melihat performa detail">
+             <span>🟢 Sehat</span>
+           </button>`;
+
+      const actionBtn = `
+        <button type="button" class="btn btn-secondary btn-sm" data-action="diagnose-outlet" data-outlet="${escapeHtml(o.outlet)}" style="padding: 3px 8px; font-size: 11px; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px;" title="Buka diagnosa & link tindak lanjut">
+          <i data-lucide="stethoscope" style="width: 12px; height: 12px; color: var(--accent-cyan);"></i>
+          <span>Diagnosa &amp; Aksi</span>
+        </button>
+      `;
 
       rowsHtml += `
         <tr>
           <td style="text-align: center; color: var(--text-muted); font-weight: 700;">#${o.rank}</td>
-          <td style="font-weight: 700;">${escapeHtml(o.outlet)}</td>
+          <td style="font-weight: 700;">
+            <a href="javascript:void(0)" class="outlet-name-link" data-action="diagnose-outlet" data-outlet="${escapeHtml(o.outlet)}" style="color: var(--text-primary); text-decoration: none; border-bottom: 1px dashed var(--accent-cyan);" title="Klik untuk diagnosa detail cabang">${escapeHtml(o.outlet)}</a>
+          </td>
           <td style="text-align: right; font-weight: 700; color: var(--status-success);">Rp ${o.revenue.toLocaleString('id-ID')}</td>
           <td style="text-align: right;">Rp ${o.profit.toLocaleString('id-ID')}</td>
           <td style="text-align: right;">${o.qty.toLocaleString('id-ID')}</td>
@@ -3119,11 +3144,397 @@ document.addEventListener('DOMContentLoaded', () => {
           <td style="text-align: right; font-weight: 700; color: var(--accent-cyan);">${o.revenueSharePct}%</td>
           <td style="text-align: right; font-weight: 700; color: ${o.stockoutRate >= 20 ? 'var(--status-danger)' : 'var(--text-primary)'};">${o.stockoutRate}%</td>
           <td style="text-align: center;">${statusBadge}</td>
+          <td style="text-align: center;">${actionBtn}</td>
         </tr>
       `;
     });
 
     tableBody.innerHTML = rowsHtml;
+    if (window.lucide) {
+      setTimeout(() => lucide.createIcons(), 20);
+    }
+  }
+
+  // ============================================================
+  // OUTLET DETAIL & ACTIONABLE DIAGNOSTICS MODAL
+  // ============================================================
+  let currentModalOutlet = null;
+  let currentModalItemTab = 'EMPTY'; // 'EMPTY' | 'CRITICAL' | 'DEAD_STOCK' | 'INCOMING_TRANSFER'
+
+  function openOutletDetailModal(outletName) {
+    if (!outletPerfData || !outletPerfData.outlets) return;
+    const outletData = outletPerfData.outlets.find(o => o.outlet === outletName);
+    if (!outletData) return;
+
+    currentModalOutlet = outletData;
+    // Default active item tab: choose the first non-empty category
+    if (outletData.emptyCount > 0) currentModalItemTab = 'EMPTY';
+    else if (outletData.criticalCount > 0) currentModalItemTab = 'CRITICAL';
+    else if (outletData.incomingTransferCount > 0) currentModalItemTab = 'INCOMING_TRANSFER';
+    else currentModalItemTab = 'DEAD_STOCK';
+
+    const backdrop = document.getElementById('outlet-modal-backdrop');
+    const titleEl = document.getElementById('outlet-modal-title');
+    const badgeStatusEl = document.getElementById('outlet-modal-badge-status');
+    const subtitleEl = document.getElementById('outlet-modal-subtitle');
+    const reasonsBoxEl = document.getElementById('outlet-modal-reasons-box');
+    const actionsGridEl = document.getElementById('outlet-modal-actions-grid');
+    const footerStatsEl = document.getElementById('outlet-modal-footer-stats');
+
+    if (titleEl) titleEl.textContent = `Diagnosa Cabang: ${outletData.outlet}`;
+    if (badgeStatusEl) {
+      badgeStatusEl.innerHTML = outletData.needsAttention
+        ? `<span class="status-badge badge-high-urgency">🔴 Perlu Perhatian</span>`
+        : `<span class="status-badge" style="background: rgba(16, 185, 129, 0.12); color: var(--status-success);">🟢 Performa Sehat</span>`;
+    }
+
+    if (subtitleEl) {
+      subtitleEl.innerHTML = `
+        Peringkat <strong>#${outletData.rank}</strong> dari ${outletPerfData.outlets.length} cabang · 
+        Omzet <strong>Rp ${outletData.revenue.toLocaleString('id-ID')}</strong> (${outletData.revenueSharePct}% kontribusi) · 
+        Total Stok <strong>${outletData.currentStock.toLocaleString('id-ID')} PCS</strong> · 
+        Kekosongan <strong>${outletData.stockoutRate}%</strong>
+      `;
+    }
+
+    // Render Diagnosa Masalah Cabang
+    if (reasonsBoxEl) {
+      const reasons = outletData.attentionReasons || [];
+      if (!outletData.needsAttention) {
+        reasonsBoxEl.innerHTML = `
+          <div class="outlet-reasons-alert" style="background: rgba(16, 185, 129, 0.08); border-color: rgba(16, 185, 129, 0.3);">
+            <div style="color: var(--status-success); font-size: 18px;"><i data-lucide="check-circle-2"></i></div>
+            <div style="flex: 1;">
+              <div class="outlet-reasons-alert-title" style="color: var(--status-success);">Performa Cabang Baik &amp; Terkendali</div>
+              <div style="font-size: 11.5px; color: var(--text-secondary); margin-bottom: 6px;">Tingkat kekosongan stok berada di bawah batas toleransi dan kontribusi omzet kuat. Berikut ringkasan operasional stok:</div>
+              ${reasons.length > 0 ? `<ul class="outlet-reasons-list">${reasons.map(r => `<li>${escapeHtml(r)}</li>`).join('')}</ul>` : ''}
+            </div>
+          </div>
+        `;
+      } else {
+        reasonsBoxEl.innerHTML = `
+          <div class="outlet-reasons-alert">
+            <div style="color: var(--status-danger); font-size: 18px;"><i data-lucide="alert-triangle"></i></div>
+            <div style="flex: 1;">
+              <div class="outlet-reasons-alert-title">Temuan Diagnosa &amp; Penyebab Perlu Perhatian:</div>
+              <ul class="outlet-reasons-list">
+                ${reasons.map(r => `<li>${escapeHtml(r)}</li>`).join('')}
+              </ul>
+            </div>
+          </div>
+        `;
+      }
+    }
+
+    // Action Cards: Deep-links to follow up
+    if (actionsGridEl) {
+      actionsGridEl.innerHTML = `
+        <div class="outlet-action-card ${outletData.incomingTransferCount > 0 ? 'primary' : ''}" data-target-action="jump-rebalance" data-outlet="${escapeHtml(outletData.outlet)}">
+          <div>
+            <div class="outlet-action-card-header">
+              <i data-lucide="truck" style="width: 15px; height: 15px; color: var(--status-warning);"></i>
+              <span>Transfer Masuk (${outletData.incomingTransferCount} Rekomendasi)</span>
+            </div>
+            <div class="outlet-action-card-desc">
+              Tersedia total ${outletData.incomingTransferQty} PCS dari cabang surplus untuk dikirim ke cabang ini.
+            </div>
+          </div>
+          <div class="outlet-action-card-btn">
+            <span>Buka Saran Transfer</span>
+            <i data-lucide="arrow-right" style="width: 12px; height: 12px;"></i>
+          </div>
+        </div>
+
+        <div class="outlet-action-card" data-target-action="jump-coverage" data-outlet="${escapeHtml(outletData.outlet)}">
+          <div>
+            <div class="outlet-action-card-header">
+              <i data-lucide="hourglass" style="width: 15px; height: 15px; color: var(--status-danger);"></i>
+              <span>Ketahanan Stok (${outletData.emptyCount} Kosong)</span>
+            </div>
+            <div class="outlet-action-card-desc">
+              Tinjau Days of Coverage (DoC) dan estimasi kehabisan stok per produk di cabang ini.
+            </div>
+          </div>
+          <div class="outlet-action-card-btn">
+            <span>Buka Ketahanan (DoC)</span>
+            <i data-lucide="arrow-right" style="width: 12px; height: 12px;"></i>
+          </div>
+        </div>
+
+        <div class="outlet-action-card" data-target-action="jump-stockout" data-outlet="${escapeHtml(outletData.outlet)}">
+          <div>
+            <div class="outlet-action-card-header">
+              <i data-lucide="history" style="width: 15px; height: 15px; color: #a855f7;"></i>
+              <span>Riwayat Stockout (${outletData.stockoutRate}%)</span>
+            </div>
+            <div class="outlet-action-card-desc">
+              Evaluasi barang yang sering atau kronis kosong di cabang ini selama periode analisis.
+            </div>
+          </div>
+          <div class="outlet-action-card-btn">
+            <span>Buka Riwayat Stockout</span>
+            <i data-lucide="arrow-right" style="width: 12px; height: 12px;"></i>
+          </div>
+        </div>
+
+        <div class="outlet-action-card" data-target-action="jump-matrix" data-outlet="${escapeHtml(outletData.outlet)}">
+          <div>
+            <div class="outlet-action-card-header">
+              <i data-lucide="layout-grid" style="width: 15px; height: 15px; color: var(--accent-cyan);"></i>
+              <span>Matriks Stok Cabang</span>
+            </div>
+            <div class="outlet-action-card-desc">
+              Langsung scroll &amp; sorot kolom stok ${escapeHtml(outletData.outlet)} pada matriks utama.
+            </div>
+          </div>
+          <div class="outlet-action-card-btn">
+            <span>Lihat Kolom Matriks</span>
+            <i data-lucide="arrow-right" style="width: 12px; height: 12px;"></i>
+          </div>
+        </div>
+      `;
+
+      // Wire click handlers for cards
+      actionsGridEl.querySelectorAll('[data-target-action]').forEach(card => {
+        card.addEventListener('click', () => {
+          const act = card.getAttribute('data-target-action');
+          const out = card.getAttribute('data-outlet');
+          if (act === 'jump-rebalance') jumpToRebalance(out);
+          else if (act === 'jump-coverage') jumpToCoverage(out);
+          else if (act === 'jump-stockout') jumpToStockoutHistory(out);
+          else if (act === 'jump-matrix') jumpToStockMatrix(out);
+        });
+      });
+    }
+
+    if (footerStatsEl) {
+      footerStatsEl.textContent = `Menampilkan data cabang ${outletData.outlet} · ${outletData.emptyCount} SKU kosong, ${outletData.criticalCount} kritis, ${outletData.incomingTransferCount} saran transfer masuk.`;
+    }
+
+    renderOutletModalItemBreakdown();
+
+    if (backdrop) backdrop.style.display = 'flex';
+    if (window.lucide) {
+      setTimeout(() => lucide.createIcons(), 30);
+    }
+  }
+
+  function closeOutletDetailModal() {
+    const backdrop = document.getElementById('outlet-modal-backdrop');
+    if (backdrop) backdrop.style.display = 'none';
+    currentModalOutlet = null;
+  }
+
+  function renderOutletModalItemBreakdown() {
+    if (!currentModalOutlet) return;
+    const outletData = currentModalOutlet;
+    const tabsContainer = document.getElementById('outlet-modal-item-tabs');
+    const itemsContainer = document.getElementById('outlet-modal-items-container');
+    if (!tabsContainer || !itemsContainer) return;
+
+    const prob = outletData.problematicItems || { empty: [], critical: [], deadStock: [] };
+    const emptyList = prob.empty || [];
+    const criticalList = prob.critical || [];
+    const deadStockList = prob.deadStock || [];
+    const incomingList = outletData.incomingTransfers || [];
+
+    const tabs = [
+      { key: 'EMPTY', label: '🚨 Stok Kosong', count: emptyList.length },
+      { key: 'CRITICAL', label: '⚠️ Stok Kritis', count: criticalList.length },
+      { key: 'DEAD_STOCK', label: '📦 Dead Stock', count: deadStockList.length },
+      { key: 'INCOMING_TRANSFER', label: '🚚 Transfer Masuk', count: incomingList.length }
+    ];
+
+    tabsContainer.innerHTML = tabs.map(t => {
+      const isActive = currentModalItemTab === t.key;
+      return `
+        <button type="button" class="btn btn-secondary btn-sm ${isActive ? 'active' : ''}" data-item-tab="${t.key}" style="padding: 3px 9px; font-size: 11px; ${isActive ? 'background: var(--accent-cyan); color: #000; font-weight: 700; border-color: var(--accent-cyan);' : ''}">
+          <span>${t.label}</span>
+          <span class="badge" style="margin-left: 3px; font-size: 10px; padding: 1px 5px; border-radius: 10px; background: ${isActive ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.08)'};">${t.count}</span>
+        </button>
+      `;
+    }).join('');
+
+    tabsContainer.querySelectorAll('[data-item-tab]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        currentModalItemTab = btn.getAttribute('data-item-tab');
+        renderOutletModalItemBreakdown();
+      });
+    });
+
+    let currentList = [];
+    if (currentModalItemTab === 'EMPTY') currentList = emptyList;
+    else if (currentModalItemTab === 'CRITICAL') currentList = criticalList;
+    else if (currentModalItemTab === 'DEAD_STOCK') currentList = deadStockList;
+    else if (currentModalItemTab === 'INCOMING_TRANSFER') currentList = incomingList;
+
+    if (currentList.length === 0) {
+      itemsContainer.innerHTML = `<div style="text-align: center; padding: 25px; color: var(--text-muted); font-size: 12px;">Tidak ada produk dalam kategori ini untuk cabang ${escapeHtml(outletData.outlet)}.</div>`;
+      return;
+    }
+
+    if (currentModalItemTab === 'INCOMING_TRANSFER') {
+      let rows = incomingList.map((item, idx) => `
+        <tr>
+          <td style="text-align: center; color: var(--text-muted); font-size: 11px;">${idx + 1}</td>
+          <td style="font-weight: 700; font-size: 11.5px;">
+            <div>${escapeHtml(item.itemName)}</div>
+            <div style="font-size: 10px; color: var(--text-muted); font-family: monospace;">${escapeHtml(item.itemCode)}</div>
+          </td>
+          <td style="font-size: 11px; color: var(--accent-cyan); font-weight: 600;">${escapeHtml(item.fromOutlet)}</td>
+          <td style="text-align: right; font-weight: 800; color: var(--status-warning); font-size: 12px;">+${item.qty} PCS</td>
+          <td style="text-align: center;">
+            <span class="status-badge ${item.urgency === 'HIGH' ? 'badge-high-urgency' : 'badge-normal-urgency'}" style="font-size: 10px; padding: 2px 6px;">
+              ${item.urgency === 'HIGH' ? '🔴 KRITIS' : '🟡 NORMAL'}
+            </span>
+          </td>
+          <td style="font-size: 10.5px; color: var(--text-secondary); max-width: 220px;">${escapeHtml(item.reason || '-')}</td>
+          <td style="text-align: center;">
+            <button type="button" class="btn btn-secondary btn-sm" data-action="jump-item-transfer" data-item="${escapeHtml(item.itemCode)}" style="padding: 2px 7px; font-size: 10.5px; white-space: nowrap;">
+              Buka Transfer &rarr;
+            </button>
+          </td>
+        </tr>
+      `).join('');
+
+      itemsContainer.innerHTML = `
+        <table class="analytics-table" style="font-size: 11.5px; width: 100%;">
+          <thead>
+            <tr>
+              <th style="width: 35px; text-align: center;">No</th>
+              <th>Nama &amp; Kode Produk</th>
+              <th>Dari Cabang Asal</th>
+              <th style="text-align: right;">Qty Transfer</th>
+              <th style="text-align: center;">Urgensi</th>
+              <th>Alasan Saran</th>
+              <th style="text-align: center; width: 110px;">Aksi</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    } else {
+      let rows = currentList.map((item, idx) => {
+        const mustHaveBadge = item.isMustHave
+          ? `<span class="must-have-badge" style="font-size: 9px; padding: 1px 4px; margin-left: 4px;">🔥 WAJIB ADA</span>`
+          : '';
+        const docText = item.status === 'DEAD_STOCK'
+          ? `<span style="color: var(--text-muted);">Dead Stock (${item.agingDays || 0} hr)</span>`
+          : (item.stock === 0 ? `<span style="color: var(--status-danger); font-weight: 700;">0 Hari (KOSONG)</span>` : `<span style="color: var(--status-warning); font-weight: 700;">${item.doc || 0} Hari</span>`);
+
+        return `
+          <tr>
+            <td style="text-align: center; color: var(--text-muted); font-size: 11px;">${idx + 1}</td>
+            <td style="font-weight: 700; font-size: 11.5px;">
+              <div>${escapeHtml(item.name)}${mustHaveBadge}</div>
+              <div style="font-size: 10px; color: var(--text-muted); font-family: monospace;">${escapeHtml(item.code)} · ${escapeHtml(item.merk || '-')}</div>
+            </td>
+            <td style="font-size: 11px; color: var(--text-secondary);">${escapeHtml(item.itemGroup || '-')}</td>
+            <td style="text-align: right; font-weight: 700; color: var(--status-warning); font-size: 11.5px;">${item.ads || 0} /hr</td>
+            <td style="text-align: right; font-weight: 800; font-size: 11.5px; color: ${item.stock === 0 ? 'var(--status-danger)' : 'var(--text-primary)'};">${(item.stock || 0).toLocaleString('id-ID')} PCS</td>
+            <td style="font-size: 11px;">${docText}</td>
+            <td style="text-align: center;">
+              <button type="button" class="btn btn-secondary btn-sm" data-action="jump-item-transfer" data-item="${escapeHtml(item.code)}" style="padding: 2px 7px; font-size: 10.5px; white-space: nowrap;">
+                Cari Transfer &rarr;
+              </button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      itemsContainer.innerHTML = `
+        <table class="analytics-table" style="font-size: 11.5px; width: 100%;">
+          <thead>
+            <tr>
+              <th style="width: 35px; text-align: center;">No</th>
+              <th>Nama &amp; Kode Produk</th>
+              <th>Kategori</th>
+              <th style="text-align: right;">Laju Jual (ADS)</th>
+              <th style="text-align: right;">Stok Cabang Ini</th>
+              <th>Ketahanan Stok</th>
+              <th style="text-align: center; width: 110px;">Aksi</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
+
+    // Bind item action buttons inside table
+    itemsContainer.querySelectorAll('[data-action="jump-item-transfer"]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const itemCode = btn.getAttribute('data-item');
+        jumpToRebalance(outletData.outlet, itemCode);
+      });
+    });
+  }
+
+  // ============================================================
+  // DEEP-LINK JUMP HELPERS
+  // ============================================================
+  function jumpToRebalance(outletName, itemCode = null) {
+    closeOutletDetailModal();
+    const tabBtn = document.querySelector('.tab-btn[data-tab="rebalance"]');
+    if (tabBtn) tabBtn.click();
+
+    setTimeout(() => {
+      const searchInput = document.getElementById('rebalance-search-input');
+      if (searchInput) {
+        searchInput.value = itemCode || outletName;
+        renderRebalanceTable();
+        const panel = document.getElementById('tab-panel-rebalance');
+        if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 150);
+  }
+
+  function jumpToCoverage(outletName, statusFilter = 'ALL') {
+    closeOutletDetailModal();
+    const tabBtn = document.querySelector('.tab-btn[data-tab="coverage"]');
+    if (tabBtn) tabBtn.click();
+
+    setTimeout(() => {
+      const searchInput = document.getElementById('coverage-search-input');
+      const statusSelect = document.getElementById('coverage-status-filter');
+      if (statusSelect && statusFilter !== 'ALL') statusSelect.value = statusFilter;
+      if (searchInput) {
+        searchInput.value = outletName;
+        renderCoverageTable();
+        const panel = document.getElementById('tab-panel-coverage');
+        if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 150);
+  }
+
+  function jumpToStockoutHistory(outletName) {
+    closeOutletDetailModal();
+    const tabBtn = document.querySelector('.tab-btn[data-tab="stockout-history"]');
+    if (tabBtn) tabBtn.click();
+
+    setTimeout(() => {
+      const searchInput = document.getElementById('stockout-search-input');
+      if (searchInput) {
+        searchInput.value = outletName;
+        renderStockoutTable();
+        const panel = document.getElementById('tab-panel-stockout-history');
+        if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 150);
+  }
+
+  function jumpToStockMatrix(outletName) {
+    closeOutletDetailModal();
+    const tabBtn = document.querySelector('.tab-btn[data-tab="stock-matrix"]');
+    if (tabBtn) tabBtn.click();
+
+    setTimeout(() => {
+      const th = document.querySelector(`#stock-table th[data-outlet="${CSS.escape(outletName)}"]`);
+      if (th) {
+        th.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+        th.classList.add('column-highlight-pulse');
+        setTimeout(() => th.classList.remove('column-highlight-pulse'), 3000);
+      }
+    }, 200);
   }
 
   function setupOutletPerformanceControls() {
@@ -3139,6 +3550,37 @@ document.addEventListener('DOMContentLoaded', () => {
     if (categoryFilter) categoryFilter.addEventListener('change', loadOutletPerformanceData);
     if (statusFilter) statusFilter.addEventListener('change', renderOutletTable);
     if (searchInput) searchInput.addEventListener('input', renderOutletTable);
+
+    const outletTable = document.getElementById('outlet-table');
+    if (outletTable && !outletTable.dataset.diagnoseWired) {
+      outletTable.dataset.diagnoseWired = 'true';
+      outletTable.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-action="diagnose-outlet"]');
+        if (btn) {
+          e.preventDefault();
+          const outletName = btn.getAttribute('data-outlet');
+          if (outletName) openOutletDetailModal(outletName);
+        }
+      });
+    }
+
+    // Modal close listeners
+    const modalBackdrop = document.getElementById('outlet-modal-backdrop');
+    const btnCloseModal = document.getElementById('btn-close-outlet-modal');
+    const btnCloseModalBottom = document.getElementById('btn-close-outlet-modal-bottom');
+
+    if (btnCloseModal) btnCloseModal.addEventListener('click', closeOutletDetailModal);
+    if (btnCloseModalBottom) btnCloseModalBottom.addEventListener('click', closeOutletDetailModal);
+    if (modalBackdrop) {
+      modalBackdrop.addEventListener('click', (e) => {
+        if (e.target === modalBackdrop) closeOutletDetailModal();
+      });
+    }
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && modalBackdrop && modalBackdrop.style.display !== 'none') {
+        closeOutletDetailModal();
+      }
+    });
 
     if (btnExport) {
       btnExport.addEventListener('click', async () => {

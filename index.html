@@ -6,7 +6,7 @@
   <title>Voucher Analytics & Smart Rebalancing - Bee Accounting</title>
   
   <!-- Font & Styling -->
-  <link rel="stylesheet" href="css/style.css?v=3.5">
+  <link rel="stylesheet" href="css/style.css?v=3.6">
   
   <!-- Lucide Icons, Chart.js, SortableJS: deferred so they download in
        parallel with HTML parsing instead of blocking it, while still
@@ -1016,12 +1016,13 @@
                 <th style="text-align: right;" data-sort-key="currentStock">Stok Saat Ini</th>
                 <th style="text-align: right;" data-sort-key="revenueSharePct">Kontribusi Omzet</th>
                 <th style="text-align: right;" data-sort-key="stockoutRate">Tingkat Kekosongan</th>
-                <th style="text-align: center;" data-sort-key="needsAttention">Status</th>
+                <th style="text-align: center;" data-sort-key="needsAttention">Status &amp; Diagnosa</th>
+                <th style="text-align: center;">Tindak Lanjut</th>
               </tr>
             </thead>
             <tbody id="outlet-table-body">
               <tr>
-                <td colspan="10" style="text-align: center; padding: 40px; color: var(--text-muted);">
+                <td colspan="11" style="text-align: center; padding: 40px; color: var(--text-muted);">
                   Memuat performa cabang...
                 </td>
               </tr>
@@ -1683,13 +1684,67 @@
     </div>
   </div>
 
+  <!-- ============================================================ -->
+  <!-- MODAL: DETAIL & TINDAK LANJUT PERFORMA CABANG                -->
+  <!-- ============================================================ -->
+  <div id="outlet-modal-backdrop" class="modal-backdrop" style="display: none;">
+    <div id="outlet-detail-modal" class="custom-modal glass-panel" style="width: 900px; max-width: 95vw; max-height: 92vh;" role="dialog" aria-modal="true" aria-labelledby="outlet-modal-title">
+      <div class="modal-header">
+        <div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <h3 id="outlet-modal-title" style="margin: 0; font-size: 16px; font-weight: 800; color: var(--text-primary);">Diagnosa Performa Cabang</h3>
+            <span id="outlet-modal-badge-status"></span>
+          </div>
+          <div id="outlet-modal-subtitle" style="font-size: 12px; color: var(--text-secondary); margin-top: 3px;"></div>
+        </div>
+        <button id="btn-close-outlet-modal" type="button" class="btn-icon-square" title="Tutup (Esc)">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+
+      <div class="modal-body" style="padding: 16px 20px;">
+        <!-- Alert Box: Diagnosa Masalah Cabang -->
+        <div id="outlet-modal-reasons-box" style="margin-bottom: 16px;"></div>
+
+        <!-- Action Cards: Deep-links to follow up -->
+        <div style="margin-bottom: 16px;">
+          <div style="font-size: 12px; font-weight: 700; color: var(--text-primary); margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">
+            <i data-lucide="sparkles" style="width: 14px; height: 14px; color: var(--status-warning);"></i>
+            <span>Tindak Lanjut Cepat (Langsung Ke Fitur Terkait)</span>
+          </div>
+          <div id="outlet-modal-actions-grid" class="outlet-actions-grid"></div>
+        </div>
+
+        <!-- Problematic Items Breakdown in this Branch -->
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 8px;">
+            <div style="font-size: 12px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 6px;">
+              <i data-lucide="package-search" style="width: 14px; height: 14px; color: var(--accent-cyan);"></i>
+              <span>Rincian Produk Bermasalah di Cabang Ini</span>
+            </div>
+            <!-- Item Status tabs inside modal -->
+            <div id="outlet-modal-item-tabs" style="display: flex; gap: 6px; flex-wrap: wrap;"></div>
+          </div>
+          <div id="outlet-modal-items-container" style="max-height: 36vh; overflow-y: auto; border: 1px solid var(--panel-border); border-radius: var(--radius-sm);"></div>
+        </div>
+      </div>
+
+      <div class="modal-footer" style="padding: 12px 18px; border-top: 1px solid var(--panel-border); display: flex; justify-content: space-between; align-items: center;">
+        <span id="outlet-modal-footer-stats" style="font-size: 11.5px; color: var(--text-muted);"></span>
+        <button id="btn-close-outlet-modal-bottom" type="button" class="btn btn-secondary" style="padding: 6px 14px; font-size: 12px;">
+          Tutup
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- Load internal Javascript Modules (deferred: downloads overlap with
        HTML parsing/CDN scripts above, execution stays in this order) -->
-  <script defer src="data/stock-data.js?v=3.5"></script>
-  <script defer src="js/stock-analytics.js?v=3.5"></script>
-  <script defer src="js/outlet-sorter.js?v=3.5"></script>
-  <script defer src="js/inventory-rebalancer.js?v=3.5"></script>
-  <script defer src="js/app.js?v=3.5"></script>
+  <script defer src="data/stock-data.js?v=3.6"></script>
+  <script defer src="js/stock-analytics.js?v=3.6"></script>
+  <script defer src="js/outlet-sorter.js?v=3.6"></script>
+  <script defer src="js/inventory-rebalancer.js?v=3.6"></script>
+  <script defer src="js/app.js?v=3.6"></script>
 
   <!-- Auto-initialize lucide icons. Deferred scripts above only finish
        running right before DOMContentLoaded, so `lucide` isn't guaranteed to
