@@ -116,6 +116,15 @@ const MIME_TYPES = {
   '.ico': 'image/x-icon'
 };
 
+// Baseline HTTP Security Defense Headers applied to all HTTP responses
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'SAMEORIGIN',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'X-XSS-Protection': '1; mode=block',
+  'Permissions-Policy': 'geolocation=(), microphone=(), camera=()'
+};
+
 // Analytics responses can run into the hundreds of KB to a few MB (full
 // stock report JSON, 1000+ row analytics arrays); gzip on repetitive tabular
 // JSON like this routinely shrinks it 5-10x, which matters most on the
@@ -149,22 +158,23 @@ const staticCompressCache = new Map(); // `${filePath}|${encoding}` -> { mtimeMs
 
 function serveStaticFile(req, res, filePath, stats, ext, headers) {
   const encoding = COMPRESSIBLE_EXTENSIONS.has(ext) ? pickEncoding(req.headers['accept-encoding']) : null;
+  const mergedHeaders = { ...SECURITY_HEADERS, ...headers };
 
   if (!encoding) {
-    res.writeHead(200, headers);
+    res.writeHead(200, mergedHeaders);
     return fs.createReadStream(filePath).pipe(res);
   }
 
   const cacheKey = `${filePath}|${encoding}`;
   const cached = staticCompressCache.get(cacheKey);
   if (cached && cached.mtimeMs === stats.mtimeMs) {
-    res.writeHead(200, { ...headers, 'Content-Encoding': encoding });
+    res.writeHead(200, { ...mergedHeaders, 'Content-Encoding': encoding });
     return res.end(cached.buf);
   }
 
   fs.readFile(filePath, (err, raw) => {
     if (err) {
-      res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8', ...SECURITY_HEADERS });
       return res.end('500 Internal Server Error');
     }
     // Static files are compressed once and cached, so a higher quality is
@@ -175,7 +185,7 @@ function serveStaticFile(req, res, filePath, stats, ext, headers) {
         : zlib.gzipSync(raw, { level: 9 }))
       : compressBuffer(raw, encoding);
     staticCompressCache.set(cacheKey, { mtimeMs: stats.mtimeMs, buf: compressed });
-    res.writeHead(200, { ...headers, 'Content-Encoding': encoding });
+    res.writeHead(200, { ...mergedHeaders, 'Content-Encoding': encoding });
     res.end(compressed);
   });
 }
@@ -187,7 +197,8 @@ function sendJson(req, res, statusCode, data) {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
-    'Vary': 'Accept-Encoding'
+    'Vary': 'Accept-Encoding',
+    ...SECURITY_HEADERS
   };
 
   // Below ~512 bytes the gzip/brotli frame overhead can exceed the savings —
@@ -254,7 +265,8 @@ const server = http.createServer((req, res) => {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type'
+      'Access-Control-Allow-Headers': 'Content-Type',
+      ...SECURITY_HEADERS
     });
     return res.end();
   }
@@ -770,7 +782,8 @@ const server = http.createServer((req, res) => {
       res.writeHead(200, {
         'Content-Type': 'application/x-sqlite3',
         'Content-Length': stat.size,
-        'Content-Disposition': `attachment; filename="${filename}"`
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        ...SECURITY_HEADERS
       });
       const stream = fs.createReadStream(dbFile);
       return stream.pipe(res);
@@ -834,14 +847,61 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // --- STATIC FILE SERVING ---
-  let safePath = pathname === '/' ? '/index.html' : pathname;
-  const normalizedPath = path.normalize(safePath).replace(/^(\.\.[\/\\])+/, '');
-  const filePath = path.join(__dirname, normalizedPath);
+  // --- STATIC FILE SERVING WITH STRICT WHITELISTING & TRAVERSAL PROTECTION ---
+  let decodedPath = '';
+  try {
+    decodedPath = decodeURIComponent(pathname);
+  } catch (e) {
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8', ...SECURITY_HEADERS });
+    return res.end('400 Bad Request');
+  }
+
+  // Reject null byte injection or suspicious control characters
+  if (decodedPath.includes('\0')) {
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8', ...SECURITY_HEADERS });
+    return res.end('400 Bad Request');
+  }
+
+  // Explicitly block any request to hidden files/folders (.git, .env, .claude, etc.)
+  if (/(^|\/)\.[^\/]*/.test(decodedPath)) {
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', ...SECURITY_HEADERS });
+    return res.end('404 Not Found');
+  }
+
+  const targetPath = decodedPath === '/' ? '/index.html' : decodedPath;
+  const safeNormalized = path.normalize(targetPath).replace(/^(\.\.[\/\\])+/, '');
+  const rootDir = path.resolve(__dirname);
+  const filePath = path.resolve(rootDir, '.' + (safeNormalized.startsWith('/') ? '' : '/') + safeNormalized);
+
+  // Prevent directory traversal outside the project directory
+  if (!filePath.startsWith(rootDir)) {
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', ...SECURITY_HEADERS });
+    return res.end('404 Not Found');
+  }
+
+  // Relative path from project root using forward slashes
+  const relPath = path.relative(rootDir, filePath).replace(/\\/g, '/');
+
+  // Whitelist: strictly allow only public frontend assets
+  function isPublicStaticAsset(rel) {
+    if (rel === 'index.html' || rel === 'favicon.ico') return true;
+    if (rel === '1308 vcr.csv' || rel === '1308 vcr_new.csv') return true;
+    if (rel.startsWith('css/') && rel.endsWith('.css')) return true;
+    if (rel.startsWith('js/') && rel.endsWith('.js')) return true;
+    if (rel === 'data/stock-data.js') return true; // Browser-facing stock parser module
+    if (rel.startsWith('assets/') || rel.startsWith('images/') || rel.startsWith('fonts/')) return true;
+    return false;
+  }
+
+  // Block backend code (server.js, database.js), database files (*.db), configuration (package.json), and git files
+  if (!isPublicStaticAsset(relPath)) {
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', ...SECURITY_HEADERS });
+    return res.end('404 Not Found');
+  }
 
   fs.stat(filePath, (err, stats) => {
     if (err || !stats.isFile()) {
-      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', ...SECURITY_HEADERS });
       return res.end('404 Not Found');
     }
 
